@@ -19,7 +19,7 @@ from tqdm import tqdm
 from .config import DatasetConfig, TrainingConfig
 from .dataset import ElectricalComponentsDataset, create_data_loaders
 from .model import build_model
-from .utils import MetricLogger, compute_detection_metrics, set_seed
+from .utils import MetricLogger, compute_detection_metrics, emit_metric_lines, set_seed
 
 LOGGER = logging.getLogger("train")
 
@@ -294,8 +294,8 @@ def main() -> None:
         )
         if epoch % train_cfg.eval_interval == 0:
             metrics = evaluate(model, valid_loader, device, dataset_cfg, train_cfg)
-            for line in format_epoch_metrics(epoch, train_loss, metrics, dataset_cfg):
-                LOGGER.info(line)
+            metric_lines = format_epoch_metrics(epoch, train_loss, metrics, dataset_cfg)
+            emit_metric_lines(metric_lines, logger=LOGGER)
 
             history.append(
                 {

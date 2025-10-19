@@ -1,8 +1,9 @@
 """Utility helpers for training and evaluating the detection model."""
 from __future__ import annotations
 
+import logging
 import random
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -189,6 +190,44 @@ def compute_detection_metrics(
         "mAP": map_value,
         "gt_counter": gt_counter,
     }
+
+
+def running_in_ipython_kernel() -> bool:
+    """Return ``True`` when executing inside an IPython/Jupyter kernel."""
+
+    try:  # ``IPython`` may be absent in some execution environments.
+        from IPython import get_ipython  # type: ignore
+    except Exception:  # pragma: no cover - depends on environment
+        return False
+
+    shell = get_ipython()
+    return bool(shell and getattr(shell, "kernel", None))
+
+
+def emit_metric_lines(
+    lines: Sequence[str],
+    *,
+    logger: Optional[logging.Logger] = None,
+    force_print: Optional[bool] = None,
+) -> None:
+    """Log metric lines and optionally echo them to ``stdout``.
+
+    Kaggle notebooks buffer ``logging`` output differently from regular Python
+    scripts, so we proactively mirror the messages with ``print`` when we detect
+    an IPython kernel.  Callers may override this behaviour by passing
+    ``force_print`` explicitly.
+    """
+
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
+    should_print = force_print if force_print is not None else running_in_ipython_kernel()
+
+    for line in lines:
+        if logger is not None:
+            logger.info(line)
+        if should_print:
+            print(line)
 
 
 class SmoothedValue:

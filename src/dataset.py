@@ -16,7 +16,7 @@ import torch
 from PIL import Image as PILImage, ImageEnhance
 from torch.utils.data import DataLoader, Dataset
 
-from .utils import sanitize_boxes_and_labels
+from .utils import running_in_ipython_kernel, sanitize_boxes_and_labels
 
 
 LOGGER = logging.getLogger(__name__)
@@ -210,18 +210,6 @@ def _safe_worker_count(requested: int) -> int:
     return min(requested, max_workers)
 
 
-def _running_in_ipython_kernel() -> bool:
-    """Return ``True`` when executing inside an IPython/Jupyter kernel."""
-
-    try:  # ``IPython`` is an optional dependency in our runtime.
-        from IPython import get_ipython  # type: ignore
-    except Exception:  # pragma: no cover - depends on environment
-        return False
-
-    shell = get_ipython()
-    return bool(shell and getattr(shell, "kernel", None))
-
-
 def _should_force_single_worker(dataset: Dataset) -> bool:
     """Determine whether multiprocessing workers should be disabled."""
 
@@ -232,7 +220,7 @@ def _should_force_single_worker(dataset: Dataset) -> bool:
     if module_name.startswith("ipykernel"):  # pragma: no cover - notebook specific
         return True
 
-    return _running_in_ipython_kernel()
+    return running_in_ipython_kernel()
 
 
 def create_data_loaders(
