@@ -210,6 +210,31 @@ def _safe_worker_count(requested: int) -> int:
     return min(requested, max_workers)
 
 
+def _running_in_ipython_kernel() -> bool:
+    """Return ``True`` when executing inside an IPython/Jupyter kernel."""
+
+    try:  # ``IPython`` is an optional dependency in our runtime.
+        from IPython import get_ipython  # type: ignore
+    except Exception:  # pragma: no cover - depends on environment
+        return False
+
+    shell = get_ipython()
+    return bool(shell and getattr(shell, "kernel", None))
+
+
+def _should_force_single_worker(dataset: Dataset) -> bool:
+    """Determine whether multiprocessing workers should be disabled."""
+
+    module_name = getattr(dataset.__class__, "__module__", "")
+    if module_name in {"__main__", "__mp_main__", "builtins"}:
+        return True
+
+    if module_name.startswith("ipykernel"):  # pragma: no cover - notebook specific
+        return True
+
+    return _running_in_ipython_kernel()
+
+
 def create_data_loaders(
     dataset: Dataset,
     batch_size: int,
@@ -220,11 +245,18 @@ def create_data_loaders(
 
     Kaggle notebooks occasionally run in restricted multiprocessing environments where
     ``fork`` based workers cannot be reaped cleanly.  We therefore favour a conservative
-    default (``num_workers=0``) and fall back to single-process loading automatically when
-    worker start-up fails.
+    default (``num_workers=0``), detect in-notebook dataset definitions that cannot be
+    spawned safely, and fall back to single-process loading automatically when worker
+    start-up fails.
     """
 
     worker_count = _safe_worker_count(num_workers)
+    if worker_count > 0 and _should_force_single_worker(dataset):
+        LOGGER.info(
+            "Detected interactive environment or in-notebook dataset definition; forcing num_workers=0."
+        )
+        worker_count = 0
+
     loader_kwargs = dict(
         dataset=dataset,
         batch_size=batch_size,
