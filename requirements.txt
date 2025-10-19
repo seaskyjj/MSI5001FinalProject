@@ -1,9 +1,0 @@
-torch
-torchvision
-torchaudio
-opencv-python-headless
-numpy
-matplotlib
-tqdm
-albumentations
-torchmetrics
