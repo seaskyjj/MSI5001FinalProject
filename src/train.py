@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import numpy as np
@@ -10,7 +11,7 @@ from typing import Dict, List
 
 import torch
 from torch import nn
-from torch.cuda.amp import GradScaler, autocast
+from torch.cuda.amp import GradScaler
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -98,7 +99,11 @@ def train_one_epoch(
         targets = move_to_device(targets, device)
 
         optimizer.zero_grad()
-        with autocast(enabled=amp):
+        autocast_enabled = amp and device.type == "cuda"
+        autocast_context = (
+            torch.amp.autocast(device_type="cuda") if autocast_enabled else contextlib.nullcontext()
+        )
+        with autocast_context:
             loss_dict = model(images, targets)
             loss = sum(loss_dict.values())
 
@@ -264,11 +269,16 @@ def main() -> None:
         shuffle=True,
         num_workers=train_cfg.num_workers,
     )
+    if train_cfg.num_workers > 1:
+        valid_workers = max(1, train_cfg.num_workers // 2)
+    else:
+        valid_workers = train_cfg.num_workers
+
     valid_loader = create_data_loaders(
         valid_dataset,
         batch_size=train_cfg.batch_size,
         shuffle=False,
-        num_workers=max(1, train_cfg.num_workers // 2),
+        num_workers=valid_workers,
     )
 
     optimizer = AdamW(model.parameters(), lr=train_cfg.learning_rate, weight_decay=train_cfg.weight_decay)
