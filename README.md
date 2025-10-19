@@ -48,7 +48,7 @@ python -m src.train \
   --epochs 25 \
   --batch-size 4 \
   --lr 1e-4 \
-  --num-workers 4 \
+  --num-workers 0 \
   --small-object            # optional: use anchors better suited to tiny objects
 ```
 
@@ -58,6 +58,9 @@ Key flags:
 * `--small-object` enables smaller RPN anchors for tiny components.
 * `--score-threshold` and `--iou-threshold` control evaluation filtering and matching.
 * `--checkpoint` defines where the best model (highest mAP) is saved.
+* `--num-workers` defaults to `0` so the pipeline works in Kaggle notebooks without triggering
+  multiprocessing shutdown assertions. Increase this gradually if you have spare CPU cores and a
+  stable runtime environment.
 
 Training produces `outputs/best_model.pth` and a `training_history.json` containing the
 loss and mAP values for each evaluation epoch. Validation logs include per-class TP/FP/FN,

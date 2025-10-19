@@ -38,7 +38,7 @@ class TrainingConfig:
     batch_size: int = 4
     learning_rate: float = 1e-4
     weight_decay: float = 1e-4
-    num_workers: int = 4
+    num_workers: int = 0
     amp: bool = True
     augmentation: bool = True
     small_object: bool = False

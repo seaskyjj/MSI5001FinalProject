@@ -1,7 +1,11 @@
 """Dataset and data loading utilities for electrical component detection."""
 from __future__ import annotations
 
+import logging
+import multiprocessing as mp
+import os
 import random
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -13,6 +17,9 @@ from PIL import Image as PILImage, ImageEnhance
 from torch.utils.data import DataLoader, Dataset
 
 from .utils import sanitize_boxes_and_labels
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -194,18 +201,59 @@ def detection_collate(batch: List[Tuple[torch.Tensor, Dict[str, torch.Tensor]]])
     return list(images), list(targets)
 
 
+def _safe_worker_count(requested: int) -> int:
+    cpu_count = os.cpu_count() or 1
+    if requested <= 0:
+        return 0
+    # Leave one core free so that the main process remains responsive on small machines.
+    max_workers = max(1, cpu_count - 1)
+    return min(requested, max_workers)
+
+
 def create_data_loaders(
     dataset: Dataset,
     batch_size: int,
     shuffle: bool,
     num_workers: int,
 ) -> DataLoader:
-    """Create a :class:`~torch.utils.data.DataLoader` for the detection dataset."""
-    return DataLoader(
-        dataset,
+    """Create a :class:`~torch.utils.data.DataLoader` for the detection dataset.
+
+    Kaggle notebooks occasionally run in restricted multiprocessing environments where
+    ``fork`` based workers cannot be reaped cleanly.  We therefore favour a conservative
+    default (``num_workers=0``) and fall back to single-process loading automatically when
+    worker start-up fails.
+    """
+
+    worker_count = _safe_worker_count(num_workers)
+    loader_kwargs = dict(
+        dataset=dataset,
         batch_size=batch_size,
         shuffle=shuffle,
-        num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
         collate_fn=detection_collate,
     )
+
+    if worker_count > 0:
+        loader_kwargs["num_workers"] = worker_count
+        loader_kwargs["persistent_workers"] = True
+        # ``spawn`` avoids PID mismatches that surface as ``AssertionError: can only
+        # test a child process`` when the notebook kernel re-uses processes.
+        loader_kwargs["multiprocessing_context"] = mp.get_context("spawn")
+    else:
+        loader_kwargs["num_workers"] = 0
+
+    try:
+        return DataLoader(**loader_kwargs)
+    except (RuntimeError, OSError, AssertionError) as exc:
+        if worker_count == 0:
+            raise
+        warnings.warn(
+            "Falling back to num_workers=0 because DataLoader worker initialisation "
+            f"failed with: {exc}",
+            RuntimeWarning,
+        )
+        LOGGER.warning("DataLoader workers failed to start (%s). Using num_workers=0 instead.", exc)
+        loader_kwargs.pop("persistent_workers", None)
+        loader_kwargs.pop("multiprocessing_context", None)
+        loader_kwargs["num_workers"] = 0
+        return DataLoader(**loader_kwargs)
