@@ -16,7 +16,7 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from .config import DatasetConfig, TrainingConfig
+from .config import DEFAULT_CLASS_SCORE_THRESHOLDS, DatasetConfig, TrainingConfig
 from .dataset import ElectricalComponentsDataset, create_data_loaders
 from .model import build_model
 from .utils import (
@@ -24,6 +24,8 @@ from .utils import (
     compute_detection_metrics,
     emit_metric_lines,
     format_epoch_metrics,
+    parse_class_threshold_entries,
+    score_threshold_mask,
     set_seed,
 )
 
@@ -40,7 +42,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=TrainingConfig().num_workers)
     parser.add_argument("--no-augmentation", action="store_true", help="Disable data augmentation")
     parser.add_argument("--small-object", action="store_true", help="Use smaller RPN anchors")
-    parser.add_argument("--score-threshold", type=float, default=0.05)
+    parser.add_argument("--score-threshold", type=float, default=0.6)
+    parser.add_argument(
+        "--class-threshold",
+        action="append",
+        default=[],
+        metavar="CLS=THRESH",
+        help="Override per-class score thresholds (e.g. --class-threshold 3=0.8)",
+    )
     parser.add_argument("--iou-threshold", type=float, default=0.5)
     parser.add_argument("--no-amp", action="store_true", help="Disable automatic mixed precision")
     parser.add_argument("--eval-interval", type=int, default=1)
@@ -62,6 +71,10 @@ def prepare_configs(args: argparse.Namespace) -> tuple[DatasetConfig, TrainingCo
         num_classes=args.num_classes,
     )
 
+    class_thresholds = DEFAULT_CLASS_SCORE_THRESHOLDS.copy()
+    overrides = parse_class_threshold_entries(args.class_threshold)
+    class_thresholds.update(overrides)
+
     train_cfg = TrainingConfig(
         epochs=args.epochs,
         batch_size=args.batch_size,
@@ -78,6 +91,7 @@ def prepare_configs(args: argparse.Namespace) -> tuple[DatasetConfig, TrainingCo
         checkpoint_path=args.checkpoint,
         pretrained_weights_path=args.pretrained_path,
         log_every=args.log_every,
+        class_score_thresholds=class_thresholds,
     )
     train_cfg.ensure_directories()
     return dataset_cfg, train_cfg
@@ -158,12 +172,18 @@ def evaluate(
         outputs = model(images)
         for output, target in zip(outputs, targets_device):
             scores = output["scores"].detach().cpu().numpy()
-            keep = scores >= train_cfg.score_threshold
+            labels = output["labels"].detach().cpu().numpy()
+            keep = score_threshold_mask(
+                scores,
+                labels,
+                train_cfg.score_threshold,
+                train_cfg.class_score_thresholds,
+            )
             predictions.append(
                 {
                     "boxes": output["boxes"].detach().cpu().numpy()[keep],
                     "scores": scores[keep],
-                    "labels": output["labels"].detach().cpu().numpy()[keep],
+                    "labels": labels[keep],
                 }
             )
             targets_for_eval.append(

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import random
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -192,6 +192,51 @@ def compute_detection_metrics(
         "mAP": map_value,
         "gt_counter": gt_counter,
     }
+
+
+def score_threshold_mask(
+    scores: np.ndarray,
+    labels: np.ndarray,
+    default_threshold: float,
+    class_thresholds: Mapping[int, float],
+) -> np.ndarray:
+    """Return a boolean mask keeping predictions that pass per-class thresholds."""
+
+    if scores.size == 0:
+        return np.zeros_like(scores, dtype=bool)
+
+    thresholds = np.full(scores.shape, default_threshold, dtype=scores.dtype)
+    if class_thresholds:
+        labels_int = labels.astype(np.int64, copy=False)
+        for cls, value in class_thresholds.items():
+            thresholds[labels_int == int(cls)] = float(value)
+
+    return scores >= thresholds
+
+
+def parse_class_threshold_entries(entries: Sequence[str]) -> Dict[int, float]:
+    """Parse ``CLS=THRESH`` strings into a mapping of per-class thresholds."""
+
+    thresholds: Dict[int, float] = {}
+    for entry in entries:
+        if not entry:
+            continue
+
+        if "=" in entry:
+            key, value = entry.split("=", 1)
+        elif ":" in entry:
+            key, value = entry.split(":", 1)
+        else:
+            raise ValueError(f"Invalid class threshold format: {entry!r}")
+
+        key = key.strip()
+        value = value.strip()
+        if not key or not value:
+            raise ValueError(f"Invalid class threshold entry: {entry!r}")
+
+        thresholds[int(key)] = float(value)
+
+    return thresholds
 
 
 def running_in_ipython_kernel() -> bool:

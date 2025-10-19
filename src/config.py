@@ -3,12 +3,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 
 DEFAULT_PRETRAINED_URL = (
     "https://download.pytorch.org/models/fasterrcnn_resnet50_fpn_v2_coco-dd69338a.pth"
 )
+
+
+DEFAULT_CLASS_SCORE_THRESHOLDS = {
+    3: 0.7,
+    6: 0.7,
+    8: 0.7,
+    12: 0.7,
+    17: 0.7,
+    24: 0.7,
+    25: 0.7,
+    26: 0.7,
+}
 
 
 @dataclass
@@ -42,7 +54,7 @@ class TrainingConfig:
     amp: bool = True
     augmentation: bool = True
     small_object: bool = False
-    score_threshold: float = 0.05
+    score_threshold: float = 0.6
     iou_threshold: float = 0.5
     eval_interval: int = 1
     seed: int = 2024
@@ -51,6 +63,9 @@ class TrainingConfig:
     pretrained_weights_path: Path = Path("weights/fasterrcnn_resnet50_fpn_v2_coco.pth")
     pretrained_weights_url: str = DEFAULT_PRETRAINED_URL
     log_every: int = 20
+    class_score_thresholds: Dict[int, float] = field(
+        default_factory=lambda: DEFAULT_CLASS_SCORE_THRESHOLDS.copy()
+    )
 
     def ensure_directories(self) -> None:
         """Create output directories if they do not exist."""
@@ -62,11 +77,14 @@ class TrainingConfig:
 class InferenceConfig:
     """Options for running model inference and visualisation."""
 
-    score_threshold: float = 0.3
+    score_threshold: float = 0.6
     max_images: int = 50
     output_dir: Path = Path("outputs/inference")
     draw_ground_truth: bool = True
     class_colors: List[str] = field(default_factory=list)
+    class_score_thresholds: Dict[int, float] = field(
+        default_factory=lambda: DEFAULT_CLASS_SCORE_THRESHOLDS.copy()
+    )
 
     def ensure_directories(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)

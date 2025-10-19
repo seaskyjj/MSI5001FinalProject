@@ -12,10 +12,22 @@ from PIL import Image as PILImage, ImageDraw, ImageFont
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from .config import DatasetConfig, InferenceConfig, TrainingConfig
+from .config import (
+    DEFAULT_CLASS_SCORE_THRESHOLDS,
+    DatasetConfig,
+    InferenceConfig,
+    TrainingConfig,
+)
 from .dataset import ElectricalComponentsDataset, create_data_loaders
 from .model import build_model
-from .utils import compute_detection_metrics, emit_metric_lines, format_epoch_metrics, set_seed
+from .utils import (
+    compute_detection_metrics,
+    emit_metric_lines,
+    format_epoch_metrics,
+    parse_class_threshold_entries,
+    score_threshold_mask,
+    set_seed,
+)
 
 LOGGER = logging.getLogger("inference")
 DEFAULT_COLORS = [
@@ -39,6 +51,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, default=InferenceConfig().output_dir)
     parser.add_argument("--score-threshold", type=float, default=InferenceConfig().score_threshold)
+    parser.add_argument(
+        "--class-threshold",
+        action="append",
+        default=[],
+        metavar="CLS=THRESH",
+        help="Override per-class score thresholds for inference",
+    )
     parser.add_argument("--iou-threshold", type=float, default=0.5)
     parser.add_argument("--max-images", type=int, default=InferenceConfig().max_images)
     parser.add_argument("--num-classes", type=int, default=DatasetConfig().num_classes)
@@ -61,6 +80,7 @@ def draw_boxes(
     target: Dict[str, np.ndarray] | None,
     class_names: List[str],
     score_threshold: float,
+    class_thresholds: Dict[int, float],
     draw_ground_truth: bool,
     output_path: Path,
 ) -> None:
@@ -74,7 +94,8 @@ def draw_boxes(
     scores = prediction["scores"]
 
     for box, label, score in zip(boxes, labels, scores):
-        if score < score_threshold:
+        threshold = class_thresholds.get(int(label), score_threshold)
+        if score < threshold:
             continue
         color = colors[label % len(colors)]
         x1, y1, x2, y2 = box.tolist()
@@ -107,11 +128,16 @@ def run_inference(args: argparse.Namespace) -> None:
         test_split=args.split,
         num_classes=args.num_classes,
     )
+    class_thresholds = DEFAULT_CLASS_SCORE_THRESHOLDS.copy()
+    overrides = parse_class_threshold_entries(args.class_threshold)
+    class_thresholds.update(overrides)
+
     inference_cfg = InferenceConfig(
         score_threshold=args.score_threshold,
         max_images=args.max_images,
         output_dir=args.output_dir,
         draw_ground_truth=args.draw_ground_truth,
+        class_score_thresholds=class_thresholds,
     )
     inference_cfg.ensure_directories()
 
@@ -120,6 +146,7 @@ def run_inference(args: argparse.Namespace) -> None:
         score_threshold=args.score_threshold,
         iou_threshold=args.iou_threshold,
         pretrained_weights_path=args.pretrained_path,
+        class_score_thresholds=class_thresholds,
     )
 
     set_seed(args.seed)
@@ -145,10 +172,19 @@ def run_inference(args: argparse.Namespace) -> None:
         image = images[0].to(device)
         output = model([image])[0]
 
+        boxes_np = output["boxes"].detach().cpu().numpy()
+        scores_np = output["scores"].detach().cpu().numpy()
+        labels_np = output["labels"].detach().cpu().numpy()
+        keep = score_threshold_mask(
+            scores_np,
+            labels_np,
+            inference_cfg.score_threshold,
+            inference_cfg.class_score_thresholds,
+        )
         prediction_np = {
-            "boxes": output["boxes"].detach().cpu().numpy(),
-            "scores": output["scores"].detach().cpu().numpy(),
-            "labels": output["labels"].detach().cpu().numpy(),
+            "boxes": boxes_np[keep],
+            "scores": scores_np[keep],
+            "labels": labels_np[keep],
         }
         target_np = {
             "boxes": targets[0]["boxes"].detach().cpu().numpy(),
@@ -166,7 +202,8 @@ def run_inference(args: argparse.Namespace) -> None:
                 prediction_np,
                 target_np if args.draw_ground_truth else None,
                 dataset_cfg.class_names,
-                args.score_threshold,
+                inference_cfg.score_threshold,
+                inference_cfg.class_score_thresholds,
                 args.draw_ground_truth,
                 output_path,
             )

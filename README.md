@@ -56,7 +56,10 @@ Key flags:
 
 * `--no-augmentation` disables geometric and photometric augmentations.
 * `--small-object` enables smaller RPN anchors for tiny components.
-* `--score-threshold` and `--iou-threshold` control evaluation filtering and matching.
+* `--score-threshold` sets the global confidence cutoff (default `0.6`) while `--iou-threshold`
+  controls matching for metric computation.
+* `--class-threshold CLS=VALUE` overrides the confidence threshold for a specific class. Multiple
+  overrides can be supplied (for example, `--class-threshold 3=0.7 --class-threshold 25=0.75`).
 * `--checkpoint` defines where the best model (highest mAP) is saved.
 * `--num-workers` defaults to `0` so the pipeline works in Kaggle notebooks without triggering
   multiprocessing shutdown assertions. Increase this gradually if you have spare CPU cores and a
@@ -80,13 +83,18 @@ python -m src.inference \
   --data-dir /path/to/dataset \
   --split test \
   --checkpoint outputs/best_model.pth \
-  --score-threshold 0.3 \
+  --score-threshold 0.6 \
+  --class-threshold 3=0.7 --class-threshold 6=0.7 --class-threshold 8=0.7 \
+  --class-threshold 12=0.7 --class-threshold 17=0.7 --class-threshold 24=0.7 \
+  --class-threshold 25=0.7 --class-threshold 26=0.7 \
   --draw-ground-truth
 ```
 
 The script reports per-class metrics on the selected split (when labels are present), computes
 the global mAP and saves annotated predictions to `outputs/inference/`. Ground-truth boxes are
-drawn in white when `--draw-ground-truth` is set.
+drawn in white when `--draw-ground-truth` is set. By default the classes `03`, `06`, `08`, `12`,
+`17`, `24`, `25` and `26` use a stricter `0.7` threshold while the remaining classes rely on the
+global `0.6` cutoff; adjust these with `--class-threshold` as needed.
 
 ## Extending the project
 
