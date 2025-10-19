@@ -5,8 +5,8 @@ import cv2
 import numpy as np
 import os
 import glob
+import pandas as pd
 from torch.utils.data import Dataset
-from xml.etree import ElementTree as et
 from . import config
 
 # 定义训练和验证时的数据变换
@@ -41,7 +41,7 @@ class SmallComponentsDataset(Dataset):
         self.transform = transform
         
         # 获取所有图片文件的路径
-        self.image_paths = sorted(glob.glob(f"{self.dir_path}/*.jpg"))
+        self.image_paths = sorted(glob.glob(f"{self.dir_path}/*.npy"))
 
     def __len__(self):
         return len(self.image_paths)
@@ -50,40 +50,35 @@ class SmallComponentsDataset(Dataset):
         image_path = self.image_paths[idx]
         
         # 读取图片
-        image = cv2.imread(image_path)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB) # 转为 RGB
+        # 从 .npy 文件加载 RGB 图像数组
+        image = np.load(image_path)
         image_height, image_width, _ = image.shape
         
-        # 解析对应的 XML 标注文件
-        annot_filename = os.path.splitext(os.path.basename(image_path))[0] + '.xml'
+        # 解析对应的 CSV 标注文件
+        annot_filename = os.path.splitext(os.path.basename(image_path))[0] + '.csv'
         annot_filepath = os.path.join(self.dir_path, annot_filename)
         
         boxes = []
         labels = []
         
         if os.path.exists(annot_filepath):
-            tree = et.parse(annot_filepath)
-            root = tree.getroot()
-            
-            for member in root.findall('object'):
-                # 获取类别名称并转换为索引
-                label_name = member.find('name').text
-                if label_name in self.classes:
-                    labels.append(self.classes.index(label_name))
-                
-                    # 获取边界框坐标
-                    xmin = int(member.find('bndbox').find('xmin').text)
-                    ymin = int(member.find('bndbox').find('ymin').text)
-                    xmax = int(member.find('bndbox').find('xmax').text)
-                    ymax = int(member.find('bndbox').find('ymax').text)
-                    
-                    # 确保坐标在图像范围内
-                    xmin = max(0, xmin)
-                    ymin = max(0, ymin)
-                    xmax = min(image_width, xmax)
-                    ymax = min(image_height, ymax)
-                    
-                    boxes.append([xmin, ymin, xmax, ymax])
+            annotations = pd.read_csv(annot_filepath)
+            # 假设 CSV 列名为 'xmin', 'ymin', 'xmax', 'ymax', 'class'
+            # 'class' 列包含的是类别名称
+            for _, row in annotations.iterrows():
+                label_name = row['class']
+                if label_name not in self.classes:
+                    continue
+
+                # 获取类别索引 (config.CLASSES 中 0 是背景)
+                labels.append(self.classes.index(label_name))
+
+                # 获取并确保边界框坐标在图像范围内
+                xmin = max(0, int(row['xmin']))
+                ymin = max(0, int(row['ymin']))
+                xmax = min(image_width, int(row['xmax']))
+                ymax = min(image_height, int(row['ymax']))
+                boxes.append([xmin, ymin, xmax, ymax])
 
         # 将数据转换为 torch.Tensor
         boxes = torch.as_tensor(boxes, dtype=torch.float32)
@@ -125,9 +120,6 @@ class SmallComponentsDataset(Dataset):
             else:
                 # 如果增强后没有 box，创建一个空的 tensor
                 target['boxes'] = torch.empty((0, 4), dtype=torch.float32)
-        
-        # 归一化图像数据
-        image = image / 255.0
         
         return image, target
 
