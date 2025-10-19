@@ -9,6 +9,8 @@ import numpy as np
 import torch
 from torch import Tensor
 
+from .config import DatasetConfig
+
 
 def set_seed(seed: int) -> None:
     """Set seeds for the Python, NumPy and PyTorch RNGs."""
@@ -228,6 +230,82 @@ def emit_metric_lines(
             logger.info(line)
         if should_print:
             print(line)
+
+
+def _resolve_class_label(dataset_cfg: DatasetConfig, index: int) -> str:
+    if index < len(dataset_cfg.class_names):
+        label = dataset_cfg.class_names[index]
+    else:
+        label = f"class_{index:02d}"
+
+    if label.startswith("class_") and label[6:].isdigit():
+        return f"class {int(label[6:]):02d}"
+    return label
+
+
+def format_epoch_metrics(
+    epoch: Optional[int],
+    train_loss: Optional[float],
+    metrics: Dict[str, torch.Tensor | float | List[float]],
+    dataset_cfg: DatasetConfig,
+    *,
+    header: Optional[str] = None,
+) -> List[str]:
+    lines: List[str] = []
+
+    val_loss = float(metrics.get("loss", float("nan")))
+    map_value = float(metrics.get("mAP", float("nan")))
+
+    if header is not None:
+        summary = header
+    elif epoch is not None:
+        summary = f"Epoch {epoch:02d}"
+    else:
+        summary = "Metrics"
+
+    if train_loss is not None and np.isfinite(train_loss):
+        summary += f" | train loss {train_loss:.4f}"
+    if np.isfinite(val_loss):
+        summary += f" | val loss {val_loss:.4f}"
+    if np.isfinite(map_value):
+        summary += f" | mAP {map_value:.4f}"
+    lines.append(summary)
+
+    precision = np.asarray(metrics.get("precision", []), dtype=float)
+    recall = np.asarray(metrics.get("recall", []), dtype=float)
+    tp = np.asarray(metrics.get("TP", []), dtype=int)
+    fp = np.asarray(metrics.get("FP", []), dtype=int)
+    fn = np.asarray(metrics.get("FN", []), dtype=int)
+    ap = np.asarray(metrics.get("AP", []), dtype=float)
+    gt_counter = np.asarray(metrics.get("gt_counter", np.zeros_like(tp)), dtype=int)
+
+    num_classes = min(len(tp), dataset_cfg.num_classes)
+    for cls_idx in range(num_classes):
+        gt_value = int(gt_counter[cls_idx]) if gt_counter.size > cls_idx else 0
+        tp_value = int(tp[cls_idx]) if tp.size > cls_idx else 0
+        fp_value = int(fp[cls_idx]) if fp.size > cls_idx else 0
+        fn_value = int(fn[cls_idx]) if fn.size > cls_idx else 0
+
+        if gt_value == 0 and tp_value == 0 and fp_value == 0 and fn_value == 0:
+            continue
+
+        label = _resolve_class_label(dataset_cfg, cls_idx)
+        p_val = (
+            float(np.nan_to_num(precision[cls_idx], nan=0.0))
+            if precision.size > cls_idx
+            else 0.0
+        )
+        r_val = (
+            float(np.nan_to_num(recall[cls_idx], nan=0.0))
+            if recall.size > cls_idx
+            else 0.0
+        )
+        line = f"{label} | P={p_val:.3f} R={r_val:.3f}  TP={tp_value} FP={fp_value} FN={fn_value}"
+        if ap.size > cls_idx and np.isfinite(ap[cls_idx]):
+            line += f" AP={ap[cls_idx]:.3f}"
+        lines.append(line)
+
+    return lines
 
 
 class SmoothedValue:

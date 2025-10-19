@@ -15,7 +15,7 @@ from tqdm import tqdm
 from .config import DatasetConfig, InferenceConfig, TrainingConfig
 from .dataset import ElectricalComponentsDataset, create_data_loaders
 from .model import build_model
-from .utils import compute_detection_metrics, set_seed
+from .utils import compute_detection_metrics, emit_metric_lines, format_epoch_metrics, set_seed
 
 LOGGER = logging.getLogger("inference")
 DEFAULT_COLORS = [
@@ -174,21 +174,14 @@ def run_inference(args: argparse.Namespace) -> None:
     metrics = compute_detection_metrics(
         predictions, targets_for_eval, dataset_cfg.num_classes, args.iou_threshold
     )
-    LOGGER.info("mAP@%.2f: %.4f", args.iou_threshold, metrics["mAP"])
-    for cls_idx, ap in enumerate(metrics["AP"]):
-        if np.isnan(ap):
-            LOGGER.info("Class %-15s: AP unavailable (no ground truth)", dataset_cfg.class_names[cls_idx])
-        else:
-            LOGGER.info(
-                "Class %-15s | AP: %.3f | Precision: %.3f | Recall: %.3f | TP: %d FP: %d FN: %d",
-                dataset_cfg.class_names[cls_idx],
-                float(ap),
-                float(metrics["precision"][cls_idx]),
-                float(metrics["recall"][cls_idx]),
-                int(metrics["TP"][cls_idx]),
-                int(metrics["FP"][cls_idx]),
-                int(metrics["FN"][cls_idx]),
-            )
+    metric_lines = format_epoch_metrics(
+        epoch=None,
+        train_loss=None,
+        metrics=metrics,
+        dataset_cfg=dataset_cfg,
+        header=f"Inference @ IoU {args.iou_threshold:.2f}",
+    )
+    emit_metric_lines(metric_lines, logger=LOGGER)
 
 
 def main() -> None:
