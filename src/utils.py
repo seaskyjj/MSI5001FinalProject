@@ -1,12 +1,15 @@
 """Utility helpers for training and evaluating the detection model."""
 from __future__ import annotations
 
+import json
 import logging
 import random
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from pathlib import Path
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import torch
+from PIL import Image as PILImage, ImageDraw, ImageFont
 from torch import Tensor
 
 from .config import DatasetConfig
@@ -145,6 +148,77 @@ def accumulate_classification_stats(
             fn[cls] += len(tb) - len(matched_gt)
 
     return tp, fp, fn, scores, matches, gt_counter
+
+
+def identify_false_positive_predictions(
+    prediction: Dict[str, np.ndarray],
+    target: Dict[str, np.ndarray],
+    num_classes: int,
+    iou_threshold: float,
+) -> List[Dict[str, Union[int, float, List[float]]]]:
+    """Return detailed records for false-positive detections in a single sample."""
+
+    boxes = np.asarray(prediction.get("boxes", np.empty((0, 4), dtype=np.float32)), dtype=np.float32)
+    scores = np.asarray(prediction.get("scores", np.empty((0,), dtype=np.float32)), dtype=np.float32)
+    labels = np.asarray(prediction.get("labels", np.empty((0,), dtype=np.int64)), dtype=np.int64)
+
+    gt_boxes = np.asarray(target.get("boxes", np.empty((0, 4), dtype=np.float32)), dtype=np.float32)
+    gt_labels = np.asarray(target.get("labels", np.empty((0,), dtype=np.int64)), dtype=np.int64)
+
+    if boxes.size == 0:
+        return []
+
+    fp_records: List[Dict[str, Union[int, float, List[float]]]] = []
+    unique_classes = np.unique(labels) if labels.size else np.asarray([], dtype=np.int64)
+
+    for cls in unique_classes:
+        cls = int(cls)
+        cls_mask = labels == cls
+        cls_indices = np.nonzero(cls_mask)[0]
+        if cls_indices.size == 0:
+            continue
+
+        pb = boxes[cls_mask]
+        ps = scores[cls_mask]
+        order = np.argsort(-ps)
+        pb_sorted = pb[order]
+        ps_sorted = ps[order]
+        original_indices = cls_indices[order]
+
+        tb = gt_boxes[gt_labels == cls]
+        iou_matrix = compute_iou_matrix(pb_sorted, tb) if tb.size else np.zeros((pb_sorted.shape[0], 0), dtype=np.float32)
+        matched_gt: set[int] = set()
+
+        for rank, (pred_idx, score_value) in enumerate(zip(original_indices, ps_sorted)):
+            if iou_matrix.shape[1]:
+                row = iou_matrix[rank]
+                best_gt = int(row.argmax())
+                best_iou = float(row[best_gt])
+            else:
+                best_gt = -1
+                best_iou = 0.0
+
+            is_true_positive = (
+                iou_matrix.shape[1] > 0
+                and best_iou >= iou_threshold
+                and best_gt not in matched_gt
+            )
+
+            if is_true_positive:
+                matched_gt.add(best_gt)
+                continue
+
+            fp_records.append(
+                {
+                    "index": int(pred_idx),
+                    "class": cls,
+                    "score": float(score_value),
+                    "best_iou": best_iou,
+                    "box": boxes[pred_idx].astype(float).tolist(),
+                }
+            )
+
+    return fp_records
 
 
 def compute_detection_metrics(
@@ -353,6 +427,133 @@ def format_epoch_metrics(
     return lines
 
 
+def load_default_font() -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Load a truetype font when available, otherwise fall back to default."""
+
+    try:
+        return ImageFont.truetype("DejaVuSans.ttf", size=14)
+    except Exception:  # pragma: no cover - fallback when font unavailable
+        return ImageFont.load_default()
+
+
+def _resolve_class_name(class_names: Sequence[str], label: int) -> str:
+    if 0 <= label < len(class_names):
+        name = class_names[label]
+    else:
+        name = f"class_{label:02d}"
+
+    if name.startswith("class_") and name[6:].isdigit():
+        return f"class {int(name[6:]):02d}"
+    return name
+
+
+def render_detections(
+    image: np.ndarray,
+    prediction: Mapping[str, np.ndarray],
+    target: Mapping[str, np.ndarray] | None,
+    class_names: Sequence[str],
+    score_threshold: float,
+    class_thresholds: Mapping[int, float],
+    draw_ground_truth: bool,
+) -> PILImage:
+    """Render detection predictions (and optional ground truth) onto an image."""
+
+    if image.dtype != np.uint8:
+        image_array = np.clip(image, 0, 255).astype(np.uint8)
+    else:
+        image_array = image
+
+    pil = PILImage.fromarray(image_array)
+    draw = ImageDraw.Draw(pil)
+    font = load_default_font()
+
+    boxes = np.asarray(prediction.get("boxes", np.empty((0, 4))), dtype=float)
+    labels = np.asarray(prediction.get("labels", np.empty((0,), dtype=int)), dtype=int)
+    scores = np.asarray(prediction.get("scores", np.empty((0,), dtype=float)), dtype=float)
+
+    for box, label, score in zip(boxes, labels, scores):
+        threshold = class_thresholds.get(int(label), score_threshold)
+        if score < threshold:
+            continue
+
+        color = DEFAULT_COLORS[int(label) % len(DEFAULT_COLORS)] if len(DEFAULT_COLORS) else "#FF6B6B"
+        x1, y1, x2, y2 = [float(coord) for coord in box]
+        draw.rectangle([x1, y1, x2, y2], outline=color, width=2)
+
+        caption = f"{_resolve_class_name(class_names, int(label))} {score:.2f}"
+        text_width = draw.textlength(caption, font=font)
+        draw.rectangle([x1, y1 - 16, x1 + text_width + 8, y1], fill=color)
+        draw.text((x1 + 4, y1 - 14), caption, fill="white", font=font)
+
+    if draw_ground_truth and target is not None:
+        gt_boxes = np.asarray(target.get("boxes", np.empty((0, 4))), dtype=float)
+        gt_labels = np.asarray(target.get("labels", np.empty((0,), dtype=int)), dtype=int)
+        for box, label in zip(gt_boxes, gt_labels):
+            x1, y1, x2, y2 = [float(coord) for coord in box]
+            draw.rectangle([x1, y1, x2, y2], outline="#FFFFFF", width=1)
+            caption = f"GT {_resolve_class_name(class_names, int(label))}"
+            text_width = draw.textlength(caption, font=font)
+            draw.rectangle([x1, y2, x1 + text_width + 6, y2 + 14], fill="#FFFFFF")
+            draw.text((x1 + 3, y2), caption, fill="black", font=font)
+
+    return pil
+
+
+def save_detection_visual(
+    image: np.ndarray,
+    prediction: Mapping[str, np.ndarray],
+    target: Mapping[str, np.ndarray] | None,
+    class_names: Sequence[str],
+    score_threshold: float,
+    class_thresholds: Mapping[int, float],
+    draw_ground_truth: bool,
+    output_path: Path,
+) -> None:
+    """Render and persist a detection visualisation to ``output_path``."""
+
+    visual = render_detections(
+        image,
+        prediction,
+        target,
+        class_names,
+        score_threshold,
+        class_thresholds,
+        draw_ground_truth,
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    visual.save(output_path)
+
+
+def write_false_positive_report(
+    fp_records: Sequence[Dict[str, object]],
+    report_path: Path,
+    *,
+    split: str,
+    score_threshold: float,
+    class_score_thresholds: Mapping[int, float],
+    iou_threshold: float,
+) -> None:
+    """Serialise detailed false-positive information to JSON."""
+
+    report_payload = {
+        "split": split,
+        "score_threshold": score_threshold,
+        "class_score_thresholds": dict(class_score_thresholds),
+        "iou_threshold": iou_threshold,
+        "false_positive_images": list(fp_records),
+    }
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report_payload, indent=2, ensure_ascii=False))
+
+
+def write_false_positive_list(fp_records: Sequence[Dict[str, object]], list_path: Path) -> None:
+    """Write newline separated image identifiers that triggered false positives."""
+
+    stems = sorted({str(record["image_id"]) for record in fp_records})
+    list_path.parent.mkdir(parents=True, exist_ok=True)
+    list_path.write_text("\n".join(stems) + ("\n" if stems else ""))
+
+
 class SmoothedValue:
     """Track a series of values and provide access to smoothed statistics."""
 
@@ -391,3 +592,4 @@ class MetricLogger:
     def format(self) -> str:
         parts = [f"{name}: {meter.avg:.4f}" for name, meter in self.meters.items()]
         return " | ".join(parts)
+

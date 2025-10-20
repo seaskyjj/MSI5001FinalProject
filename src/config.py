@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 DEFAULT_PRETRAINED_URL = (
@@ -53,6 +53,11 @@ class TrainingConfig:
     num_workers: int = 0
     amp: bool = True
     augmentation: bool = True
+    mosaic_prob: float = 0.0
+    mixup_prob: float = 0.0
+    mixup_alpha: float = 0.4
+    scale_jitter_min: float = 1.0
+    scale_jitter_max: float = 1.0
     small_object: bool = False
     score_threshold: float = 0.6
     iou_threshold: float = 0.5
@@ -66,11 +71,18 @@ class TrainingConfig:
     class_score_thresholds: Dict[int, float] = field(
         default_factory=lambda: DEFAULT_CLASS_SCORE_THRESHOLDS.copy()
     )
+    exclude_samples: Tuple[str, ...] = tuple()
+    fp_visual_dir: Optional[Path] = Path("outputs/fp_images")
+    fp_report_path: Optional[Path] = None
+    fp_list_path: Optional[Path] = None
+    fp_classes: Tuple[int, ...] = (16, 30)
 
     def ensure_directories(self) -> None:
         """Create output directories if they do not exist."""
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.pretrained_weights_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.fp_visual_dir:
+            self.fp_visual_dir.mkdir(parents=True, exist_ok=True)
 
 
 @dataclass

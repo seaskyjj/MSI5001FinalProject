@@ -8,7 +8,7 @@ import random
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -32,6 +32,10 @@ class AugmentationParams:
     contrast: float = 0.2
     saturation: float = 0.2
     hue: float = 0.02
+    mosaic_prob: float = 0.0
+    mixup_prob: float = 0.0
+    mixup_alpha: float = 0.4
+    scale_jitter_range: Tuple[float, float] = (1.0, 1.0)
 
 
 def load_image_hwc_uint8(path: Path) -> np.ndarray:
@@ -65,6 +69,7 @@ class ElectricalComponentsDataset(Dataset):
         class_names: Iterable[str],
         transform: Optional[AugmentationParams] = None,
         use_augmentation: bool = False,
+        exclude_stems: Optional[Iterable[str]] = None,
     ) -> None:
         self.root = Path(root)
         self.split = split
@@ -84,6 +89,22 @@ class ElectricalComponentsDataset(Dataset):
         if not self.image_stems:
             raise RuntimeError(f"No label files found in {self.label_dir}")
 
+        exclude_set: Set[str] = set()
+        if exclude_stems:
+            exclude_set = {Path(stem).stem for stem in exclude_stems}
+            if exclude_set:
+                before = len(self.image_stems)
+                self.image_stems = [stem for stem in self.image_stems if stem not in exclude_set]
+                removed = before - len(self.image_stems)
+                if removed:
+                    LOGGER.info(
+                        "Split %s: excluded %d samples based on provided stem filter.",
+                        self.split,
+                        removed,
+                    )
+
+        self.excluded_stems = sorted(exclude_set)
+
         # Pre-load all annotations to reduce I/O during training.
         self.annotations: Dict[str, pd.DataFrame] = {
             stem: pd.read_csv(self.label_dir / f"{stem}.csv") for stem in self.image_stems
@@ -94,43 +115,19 @@ class ElectricalComponentsDataset(Dataset):
 
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         stem = self.image_stems[index]
-        image_path = self.image_dir / f"{stem}.npy"
-        image = load_image_hwc_uint8(image_path)
+        image, boxes, labels = self._load_raw_sample(stem)
+
+        if self.use_augmentation:
+            image, boxes, labels = self._apply_composite_augmentations(stem, image, boxes, labels)
+            image, boxes = self._apply_augmentations(image, boxes)
+
         height, width = image.shape[:2]
 
-        ann = self.annotations[stem]
-        x_center = ann["x_center"].to_numpy(dtype=np.float32)
-        y_center = ann["y_center"].to_numpy(dtype=np.float32)
-        box_width = ann["width"].to_numpy(dtype=np.float32)
-        box_height = ann["height"].to_numpy(dtype=np.float32)
-
-        # Auto-detect normalised coordinates and scale back to pixel space.
-        if (
-            (x_center.size == 0 or float(x_center.max()) <= 1.0)
-            and (y_center.size == 0 or float(y_center.max()) <= 1.0)
-            and (box_width.size == 0 or float(box_width.max()) <= 1.0)
-            and (box_height.size == 0 or float(box_height.max()) <= 1.0)
-        ):
-            x_center *= width
-            y_center *= height
-            box_width *= width
-            box_height *= height
-
-        x1 = x_center - box_width / 2.0
-        y1 = y_center - box_height / 2.0
-        x2 = x_center + box_width / 2.0
-        y2 = y_center + box_height / 2.0
-
-        boxes = np.stack([x1, y1, x2, y2], axis=1)
-        labels = ann["class"].to_numpy(dtype=np.int64)
-
-        if self.use_augmentation and len(boxes):
-            image, boxes = self._apply_augmentations(image, boxes)
-            height, width = image.shape[:2]
-
         image_tensor = torch.from_numpy(image).permute(2, 0, 1).float() / 255.0
-        boxes_tensor = torch.from_numpy(boxes).float()
-        labels_tensor = torch.from_numpy(labels).long()
+        boxes_tensor = torch.from_numpy(boxes).float() if boxes.size else torch.zeros((0, 4), dtype=torch.float32)
+        labels_tensor = (
+            torch.from_numpy(labels).long() if labels.size else torch.zeros((0,), dtype=torch.long)
+        )
 
         boxes_tensor, labels_tensor = sanitize_boxes_and_labels(
             boxes_tensor, labels_tensor, height, width
@@ -150,19 +147,89 @@ class ElectricalComponentsDataset(Dataset):
 
         return image_tensor, target
 
+    def _load_raw_sample(self, stem: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        image_path = self.image_dir / f"{stem}.npy"
+        image = load_image_hwc_uint8(image_path)
+        height, width = image.shape[:2]
+
+        ann = self.annotations[stem]
+        boxes, labels = self._annotation_to_boxes(ann, width, height)
+        return image, boxes, labels
+
+    @staticmethod
+    def _annotation_to_boxes(
+        ann: pd.DataFrame, width: int, height: int
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        if ann.empty:
+            return np.zeros((0, 4), dtype=np.float32), np.zeros((0,), dtype=np.int64)
+
+        x_center = ann["x_center"].to_numpy(dtype=np.float32)
+        y_center = ann["y_center"].to_numpy(dtype=np.float32)
+        box_width = ann["width"].to_numpy(dtype=np.float32)
+        box_height = ann["height"].to_numpy(dtype=np.float32)
+
+        # Auto-detect normalised coordinates and scale back to pixel space.
+        if (
+            (x_center.size == 0 or float(x_center.max()) <= 1.0)
+            and (y_center.size == 0 or float(y_center.max()) <= 1.0)
+            and (box_width.size == 0 or float(box_width.max()) <= 1.0)
+            and (box_height.size == 0 or float(box_height.max()) <= 1.0)
+        ):
+            x_center = x_center * width
+            y_center = y_center * height
+            box_width = box_width * width
+            box_height = box_height * height
+
+        x1 = x_center - box_width / 2.0
+        y1 = y_center - box_height / 2.0
+        x2 = x_center + box_width / 2.0
+        y2 = y_center + box_height / 2.0
+
+        boxes = np.stack([x1, y1, x2, y2], axis=1).astype(np.float32)
+        labels = ann["class"].to_numpy(dtype=np.int64)
+        return boxes, labels
+
+    def _apply_composite_augmentations(
+        self,
+        stem: str,
+        image: np.ndarray,
+        boxes: np.ndarray,
+        labels: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        params = self.transform_params
+
+        if (
+            params.mosaic_prob > 0.0
+            and random.random() < params.mosaic_prob
+            and len(self.image_stems) >= 4
+        ):
+            image, boxes, labels = self._apply_mosaic(stem, image, boxes, labels)
+
+        if (
+            params.mixup_prob > 0.0
+            and params.mixup_alpha > 0.0
+            and random.random() < params.mixup_prob
+        ):
+            image, boxes, labels = self._apply_mixup(stem, image, boxes, labels)
+
+        if params.scale_jitter_range != (1.0, 1.0):
+            image, boxes = self._apply_scale_jitter(image, boxes, params.scale_jitter_range)
+
+        return image, boxes, labels
+
     def _apply_augmentations(
         self, image: np.ndarray, boxes: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray]:
         params = self.transform_params
         height, width = image.shape[:2]
 
-        if random.random() < params.horizontal_flip_prob:
+        if boxes.size and random.random() < params.horizontal_flip_prob:
             image = np.ascontiguousarray(image[:, ::-1, :])
             x1 = width - boxes[:, 2]
             x2 = width - boxes[:, 0]
             boxes[:, 0], boxes[:, 2] = x1, x2
 
-        if random.random() < params.vertical_flip_prob:
+        if boxes.size and random.random() < params.vertical_flip_prob:
             image = np.ascontiguousarray(image[::-1, :, :])
             y1 = height - boxes[:, 3]
             y2 = height - boxes[:, 1]
@@ -183,15 +250,170 @@ class ElectricalComponentsDataset(Dataset):
                 factor = 1.0 + random.uniform(-params.saturation, params.saturation)
                 pil = enhancer.enhance(max(0.1, factor))
             if params.hue:
-                # Hue adjustment via simple conversion to HSV.
-                hsv = np.array(pil.convert("HSV"), dtype=np.uint8)
+                hsv_image = pil.convert("HSV")
+                h_channel, s_channel, v_channel = hsv_image.split()
+                hue_array = np.array(h_channel, dtype=np.uint8)
                 delta = int(params.hue * 255.0 * random.choice([-1, 1]))
-                hsv[..., 0] = (hsv[..., 0].astype(int) + delta) % 255
-                pil = PILImage.fromarray(hsv, mode="HSV").convert("RGB")
+                hue_adjusted = ((hue_array.astype(int) + delta) % 255).astype(np.uint8)
+                new_h = PILImage.fromarray(hue_adjusted)
+                hsv_image = PILImage.merge("HSV", (new_h, s_channel, v_channel))
+                pil = hsv_image.convert("RGB")
             image = np.array(pil)
 
-        boxes[:, [0, 2]] = boxes[:, [0, 2]].clip(0, width)
-        boxes[:, [1, 3]] = boxes[:, [1, 3]].clip(0, height)
+        if boxes.size:
+            boxes[:, [0, 2]] = boxes[:, [0, 2]].clip(0, width)
+            boxes[:, [1, 3]] = boxes[:, [1, 3]].clip(0, height)
+        return image, boxes
+
+    def _apply_scale_jitter(
+        self, image: np.ndarray, boxes: np.ndarray, scale_range: Tuple[float, float]
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        min_scale, max_scale = scale_range
+        if max_scale <= 0 or min_scale <= 0:
+            return image, boxes
+
+        factor = random.uniform(min_scale, max_scale)
+        if np.isclose(factor, 1.0):
+            return image, boxes
+
+        height, width = image.shape[:2]
+        new_height = max(1, int(round(height * factor)))
+        new_width = max(1, int(round(width * factor)))
+
+        pil = PILImage.fromarray(image)
+        resized = pil.resize((new_width, new_height), resample=PILImage.BILINEAR)
+        image = np.array(resized)
+
+        if boxes.size:
+            boxes = boxes.copy()
+            boxes[:, [0, 2]] *= float(new_width) / float(width)
+            boxes[:, [1, 3]] *= float(new_height) / float(height)
+        return image, boxes
+
+    def _apply_mosaic(
+        self,
+        stem: str,
+        image: np.ndarray,
+        boxes: np.ndarray,
+        labels: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        height, width = image.shape[:2]
+        candidate_stems = [s for s in self.image_stems if s != stem]
+        if len(candidate_stems) < 3:
+            return image, boxes, labels
+
+        selected = random.sample(candidate_stems, 3)
+
+        images: List[np.ndarray] = [image]
+        boxes_list: List[np.ndarray] = [boxes]
+        labels_list: List[np.ndarray] = [labels]
+
+        for other_stem in selected:
+            other_img, other_boxes, other_labels = self._load_raw_sample(other_stem)
+            other_img, other_boxes = self._resize_like(other_img, other_boxes, width, height)
+            images.append(other_img)
+            boxes_list.append(other_boxes)
+            labels_list.append(other_labels)
+
+        canvas = np.zeros((height * 2, width * 2, 3), dtype=np.uint8)
+        offsets = [(0, 0), (0, width), (height, 0), (height, width)]
+        combined_boxes: List[np.ndarray] = []
+        combined_labels: List[np.ndarray] = []
+
+        for img, bxs, lbls, (y_off, x_off) in zip(images, boxes_list, labels_list, offsets):
+            canvas[y_off : y_off + height, x_off : x_off + width] = img
+            if bxs.size:
+                shifted = bxs.copy()
+                shifted[:, [0, 2]] += x_off
+                shifted[:, [1, 3]] += y_off
+                combined_boxes.append(shifted)
+                combined_labels.append(lbls)
+
+        if combined_boxes:
+            boxes = np.concatenate(combined_boxes, axis=0)
+            labels = np.concatenate(combined_labels, axis=0)
+        else:
+            boxes = np.zeros((0, 4), dtype=np.float32)
+            labels = np.zeros((0,), dtype=np.int64)
+
+        crop_x = random.randint(0, width)
+        crop_y = random.randint(0, height)
+        canvas = canvas[crop_y : crop_y + height, crop_x : crop_x + width]
+
+        if boxes.size:
+            boxes = boxes.copy()
+            boxes[:, [0, 2]] -= crop_x
+            boxes[:, [1, 3]] -= crop_y
+
+            keep = (
+                (boxes[:, 2] > 0)
+                & (boxes[:, 3] > 0)
+                & (boxes[:, 0] < width)
+                & (boxes[:, 1] < height)
+            )
+            boxes = boxes[keep]
+            labels = labels[keep]
+            boxes[:, [0, 2]] = boxes[:, [0, 2]].clip(0, width)
+            boxes[:, [1, 3]] = boxes[:, [1, 3]].clip(0, height)
+
+        return canvas, boxes, labels
+
+    def _apply_mixup(
+        self,
+        stem: str,
+        image: np.ndarray,
+        boxes: np.ndarray,
+        labels: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        other_stem = self._sample_alternative_stem(stem)
+        if other_stem is None:
+            return image, boxes, labels
+
+        other_img, other_boxes, other_labels = self._load_raw_sample(other_stem)
+        height, width = image.shape[:2]
+        other_img, other_boxes = self._resize_like(other_img, other_boxes, width, height)
+
+        alpha = max(self.transform_params.mixup_alpha, 1e-3)
+        lam = np.random.beta(alpha, alpha)
+        lam = float(np.clip(lam, 0.3, 0.7))
+
+        mixed = (
+            image.astype(np.float32) * lam + other_img.astype(np.float32) * (1.0 - lam)
+        ).astype(np.uint8)
+
+        if boxes.size and other_boxes.size:
+            boxes = np.concatenate([boxes, other_boxes], axis=0)
+            labels = np.concatenate([labels, other_labels], axis=0)
+        elif other_boxes.size:
+            boxes = other_boxes.copy()
+            labels = other_labels.copy()
+
+        return mixed, boxes, labels
+
+    def _sample_alternative_stem(self, current: str) -> Optional[str]:
+        if len(self.image_stems) <= 1:
+            return None
+        candidates = [stem for stem in self.image_stems if stem != current]
+        if not candidates:
+            return None
+        return random.choice(candidates)
+
+    @staticmethod
+    def _resize_like(
+        image: np.ndarray, boxes: np.ndarray, target_width: int, target_height: int
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        height, width = image.shape[:2]
+        if height == target_height and width == target_width:
+            return image, boxes
+
+        pil = PILImage.fromarray(image)
+        resized = pil.resize((target_width, target_height), resample=PILImage.BILINEAR)
+        image = np.array(resized)
+
+        if boxes.size:
+            boxes = boxes.copy()
+            boxes[:, [0, 2]] *= float(target_width) / float(width)
+            boxes[:, [1, 3]] *= float(target_height) / float(height)
         return image, boxes
 
 
