@@ -15,6 +15,36 @@ from torch import Tensor
 from .config import DatasetConfig
 
 
+# ``DEFAULT_COLORS`` previously lived in the Kaggle notebook version of the
+# project.  The constant was referenced when rendering detections but never
+# actually defined in the standalone module, which caused a ``NameError`` when
+# the training script attempted to export visualisations.  Keeping the palette
+# here restores the expected behaviour while remaining independent from the
+# notebook.
+DEFAULT_COLORS: Tuple[str, ...] = (
+    "#FF6B6B",
+    "#4ECDC4",
+    "#FFD93D",
+    "#1A535C",
+    "#FF9F1C",
+    "#2EC4B6",
+    "#E71D36",
+    "#9B5DE5",
+    "#F15BB5",
+    "#00BBF9",
+    "#00F5D4",
+    "#6C5CE7",
+    "#45B7D1",
+    "#F9C80E",
+    "#F86624",
+    "#EA3546",
+    "#662E9B",
+    "#43BCCD",
+    "#A1C181",
+    "#BB9F06",
+)
+
+
 def set_seed(seed: int) -> None:
     """Set seeds for the Python, NumPy and PyTorch RNGs."""
     random.seed(seed)
