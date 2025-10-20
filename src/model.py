@@ -43,7 +43,7 @@ def build_model(
 
     if train_cfg.small_object:
         anchor_generator = AnchorGenerator(
-            sizes=((16, 32, 64, 128, 256),) * 5,
+            sizes=((16,), (32,), (64,), (128,), (256,)),
             aspect_ratios=((0.5, 1.0, 2.0),) * 5,
         )
         model.rpn.anchor_generator = anchor_generator

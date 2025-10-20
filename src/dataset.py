@@ -252,11 +252,9 @@ class ElectricalComponentsDataset(Dataset):
             if params.hue:
                 hsv_image = pil.convert("HSV")
                 h_channel, s_channel, v_channel = hsv_image.split()
-                hue_array = np.array(h_channel, dtype=np.uint8)
                 delta = int(params.hue * 255.0 * random.choice([-1, 1]))
-                hue_adjusted = ((hue_array.astype(int) + delta) % 255).astype(np.uint8)
-                new_h = PILImage.fromarray(hue_adjusted)
-                hsv_image = PILImage.merge("HSV", (new_h, s_channel, v_channel))
+                h_channel = h_channel.point(lambda h: (h + delta) % 255)
+                hsv_image = PILImage.merge("HSV", (h_channel, s_channel, v_channel))
                 pil = hsv_image.convert("RGB")
             image = np.array(pil)
 

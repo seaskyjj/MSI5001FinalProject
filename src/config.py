@@ -10,16 +10,21 @@ DEFAULT_PRETRAINED_URL = (
     "https://download.pytorch.org/models/fasterrcnn_resnet50_fpn_v2_coco-dd69338a.pth"
 )
 
-
+#0.999 menas class does not exist
 DEFAULT_CLASS_SCORE_THRESHOLDS = {
-    3: 0.7,
-    6: 0.7,
-    8: 0.7,
-    12: 0.7,
-    17: 0.7,
-    24: 0.7,
-    25: 0.7,
-    26: 0.7,
+    3: 0.999,  
+    6: 0.8,
+    7: 0.9,
+    8: 0.999,
+    12: 0.999,
+    16: 0.9,
+    17: 0.999,
+    20: 0.9,
+    21: 0.8,
+    24: 0.999,
+    25: 0.9,
+    26: 0.999,
+    30: 0.9,
 }
 
 
@@ -53,12 +58,12 @@ class TrainingConfig:
     num_workers: int = 0
     amp: bool = True
     augmentation: bool = True
-    mosaic_prob: float = 0.0
-    mixup_prob: float = 0.0
+    mosaic_prob: float = 0.5
+    mixup_prob: float = 0.5
     mixup_alpha: float = 0.4
     scale_jitter_min: float = 1.0
     scale_jitter_max: float = 1.0
-    small_object: bool = False
+    small_object: bool = True
     score_threshold: float = 0.6
     iou_threshold: float = 0.5
     eval_interval: int = 1
@@ -90,7 +95,7 @@ class InferenceConfig:
     """Options for running model inference and visualisation."""
 
     score_threshold: float = 0.6
-    max_images: int = 50
+    max_images: int = 200
     output_dir: Path = Path("outputs/inference")
     draw_ground_truth: bool = True
     class_colors: List[str] = field(default_factory=list)
