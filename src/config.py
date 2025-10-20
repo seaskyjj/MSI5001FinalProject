@@ -53,7 +53,7 @@ class TrainingConfig:
 
     epochs: int = 20
     batch_size: int = 4
-    learning_rate: float = 1e-4
+    learning_rate: float = 2e-5
     weight_decay: float = 1e-4
     num_workers: int = 0
     amp: bool = True
@@ -61,8 +61,8 @@ class TrainingConfig:
     mosaic_prob: float = 0.5
     mixup_prob: float = 0.5
     mixup_alpha: float = 0.4
-    scale_jitter_min: float = 1.0
-    scale_jitter_max: float = 1.0
+    scale_jitter_min: float = 0.7
+    scale_jitter_max: float = 1.3
     small_object: bool = True
     score_threshold: float = 0.6
     iou_threshold: float = 0.5
