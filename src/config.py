@@ -12,19 +12,20 @@ DEFAULT_PRETRAINED_URL = (
 
 #0.999 menas class does not exist
 DEFAULT_CLASS_SCORE_THRESHOLDS = {
+    0: 0.3,
     3: 0.999,  
     6: 0.8,
     7: 0.9,
     8: 0.999,
     12: 0.999,
-    16: 0.9,
+    16: 0.97,
     17: 0.999,
     20: 0.9,
     21: 0.8,
     24: 0.999,
-    25: 0.9,
+    25: 0.97,
     26: 0.999,
-    30: 0.9,
+    30: 0.95,
 }
 
 
@@ -53,13 +54,13 @@ class TrainingConfig:
 
     epochs: int = 20
     batch_size: int = 4
-    learning_rate: float = 2e-5
-    weight_decay: float = 1e-4
+    learning_rate: float = 1e-5
+    weight_decay: float = 1e-5
     num_workers: int = 0
     amp: bool = True
     augmentation: bool = True
-    mosaic_prob: float = 0.5
-    mixup_prob: float = 0.5
+    mosaic_prob: float = 0.6
+    mixup_prob: float = 0.6
     mixup_alpha: float = 0.4
     scale_jitter_min: float = 0.7
     scale_jitter_max: float = 1.3
@@ -94,7 +95,7 @@ class TrainingConfig:
 class InferenceConfig:
     """Options for running model inference and visualisation."""
 
-    score_threshold: float = 0.6
+    score_threshold: float = 0.7
     max_images: int = 200
     output_dir: Path = Path("outputs/inference")
     draw_ground_truth: bool = True

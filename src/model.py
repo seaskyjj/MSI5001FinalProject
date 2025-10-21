@@ -10,7 +10,7 @@ from torch import nn
 from torchvision.models.detection import fasterrcnn_resnet50_fpn_v2
 from torchvision.models.detection import FasterRCNN_ResNet50_FPN_V2_Weights
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
-from torchvision.models.detection.rpn import AnchorGenerator
+from torchvision.models.detection.rpn import AnchorGenerator, RPNHead
 
 from .config import DatasetConfig, TrainingConfig
 
@@ -43,11 +43,28 @@ def build_model(
 
     if train_cfg.small_object:
         anchor_generator = AnchorGenerator(
-            sizes=((16,), (32,), (64,), (128,), (256,)),
-            aspect_ratios=((0.5, 1.0, 2.0),) * 5,
+            #sizes=((16,), (32,), (64,), (128,), (256,)),
+            #aspect_ratios=((0.5, 1.0, 2.0),) * 5,
+            sizes=((16, 24), (32, 48), (64, 96), (128, 192), (256, 384)),
+            aspect_ratios=((0.2, 0.5, 1.0, 2.0, 5.0),) * 5
         )
         model.rpn.anchor_generator = anchor_generator
         LOGGER.info("Using custom anchor sizes optimised for small objects")
+
+        # 1. 从旧的 RPNHead 中获取 in_channels
+        in_channels = model.rpn.head.cls_logits.in_channels
+
+        # 2. 从新的 AnchorGenerator 获取每个位置的锚框数
+        #    (例如，5 个 aspect_ratios * 2 个 sizes = 10)
+        num_anchors_per_location = anchor_generator.num_anchors_per_location()[0]
+    
+        # 3. 创建并替换 RPNHead
+        new_head = RPNHead(in_channels, num_anchors_per_location)
+        model.rpn.head = new_head
+        LOGGER.info(
+            "Re-created RPN head for %d anchors per location to match AnchorGenerator.",
+            num_anchors_per_location
+        )
 
     model.to(device)
     return model
