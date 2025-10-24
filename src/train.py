@@ -67,6 +67,48 @@ def parse_args() -> argparse.Namespace:
         "--scale-jitter", nargs=2, type=float, metavar=("MIN", "MAX"), default=None,
         help="Uniform scale jitter range applied to each image before flips/jitter",
     )
+    parser.add_argument(
+        "--rotation-prob",
+        type=float,
+        default=TrainingConfig().rotation_prob,
+        help="Probability of applying a random in-place rotation.",
+    )
+    parser.add_argument(
+        "--rotation-max-degrees",
+        type=float,
+        default=TrainingConfig().rotation_max_degrees,
+        help="Maximum absolute angle in degrees for random rotations.",
+    )
+    parser.add_argument(
+        "--affine-prob",
+        type=float,
+        default=TrainingConfig().affine_prob,
+        help="Probability of applying a random affine transform (translate/scale/shear).",
+    )
+    parser.add_argument(
+        "--affine-translate",
+        nargs=2,
+        type=float,
+        metavar=("FRAC_X", "FRAC_Y"),
+        default=None,
+        help="Maximum absolute translation as a fraction of image width/height.",
+    )
+    parser.add_argument(
+        "--affine-scale",
+        nargs=2,
+        type=float,
+        metavar=("MIN", "MAX"),
+        default=None,
+        help="Uniform scaling range applied during affine augmentation.",
+    )
+    parser.add_argument(
+        "--affine-shear",
+        nargs=2,
+        type=float,
+        metavar=("SHEAR_X", "SHEAR_Y"),
+        default=None,
+        help="Maximum absolute shear angles (degrees) for the affine augmentation.",
+    )
     parser.add_argument("--small-object", action="store_true", help="Use smaller RPN anchors")
     parser.add_argument("--score-threshold", type=float, default=0.6)
     parser.add_argument(
@@ -82,6 +124,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=2024)
     parser.add_argument("--checkpoint", type=Path, default=TrainingConfig().checkpoint_path)
     parser.add_argument("--pretrained-path", type=Path, default=TrainingConfig().pretrained_weights_path)
+    parser.add_argument("--resume", action="store_true", help="Resume training from a saved checkpoint.")
+    parser.add_argument(
+        "--resume-path",
+        type=Path,
+        default=None,
+        help="Optional path to the checkpoint used for resuming training. Defaults to the last-checkpoint file.",
+    )
     parser.add_argument("--log-every", type=int, default=20)
     parser.add_argument("--train-split", default=DatasetConfig().train_split)
     parser.add_argument("--valid-split", default=DatasetConfig().valid_split)
@@ -180,6 +229,7 @@ def _resolve_exclusions(paths: List[Path], samples: List[str]) -> List[str]:
 
 
 def prepare_configs(args: argparse.Namespace) -> tuple[DatasetConfig, TrainingConfig]:
+    default_train_cfg = TrainingConfig()
     dataset_cfg = DatasetConfig(
         base_dir=args.data_dir,
         train_split=args.train_split,
@@ -197,15 +247,42 @@ def prepare_configs(args: argparse.Namespace) -> tuple[DatasetConfig, TrainingCo
         fp_class_values = sorted({int(value) for value in args.fp_class})
         fp_classes = tuple(fp_class_values)
     else:
-        fp_classes = TrainingConfig().fp_classes
+        fp_classes = default_train_cfg.fp_classes
 
-    fp_dir = args.fp_dir if args.fp_dir is not None else TrainingConfig().fp_visual_dir
+    fp_dir = args.fp_dir if args.fp_dir is not None else default_train_cfg.fp_visual_dir
 
     if args.scale_jitter:
         scale_min, scale_max = args.scale_jitter
     else:
-        scale_min = TrainingConfig().scale_jitter_min
-        scale_max = TrainingConfig().scale_jitter_max
+        scale_min = default_train_cfg.scale_jitter_min
+        scale_max = default_train_cfg.scale_jitter_max
+
+    rotation_prob = args.rotation_prob
+    rotation_max = args.rotation_max_degrees
+
+    affine_prob = args.affine_prob
+    if args.affine_translate is not None:
+        affine_translate = (float(args.affine_translate[0]), float(args.affine_translate[1]))
+    else:
+        affine_translate = default_train_cfg.affine_translate
+
+    if args.affine_scale is not None:
+        affine_scale_range = (float(args.affine_scale[0]), float(args.affine_scale[1]))
+    else:
+        affine_scale_range = default_train_cfg.affine_scale_range
+
+    if args.affine_shear is not None:
+        affine_shear = (float(args.affine_shear[0]), float(args.affine_shear[1]))
+    else:
+        affine_shear = default_train_cfg.affine_shear
+
+    last_checkpoint_path = args.checkpoint.parent / "last_checkpoint.pth"
+    if args.resume_path is not None:
+        resume_path = args.resume_path
+    elif args.resume:
+        resume_path = last_checkpoint_path
+    else:
+        resume_path = None
 
     train_cfg = TrainingConfig(
         epochs=args.epochs,
@@ -220,6 +297,12 @@ def prepare_configs(args: argparse.Namespace) -> tuple[DatasetConfig, TrainingCo
         mixup_alpha=args.mixup_alpha,
         scale_jitter_min=scale_min,
         scale_jitter_max=scale_max,
+        rotation_prob=rotation_prob,
+        rotation_max_degrees=rotation_max,
+        affine_prob=affine_prob,
+        affine_translate=affine_translate,
+        affine_scale_range=affine_scale_range,
+        affine_shear=affine_shear,
         small_object=args.small_object,
         score_threshold=args.score_threshold,
         iou_threshold=args.iou_threshold,
@@ -227,6 +310,9 @@ def prepare_configs(args: argparse.Namespace) -> tuple[DatasetConfig, TrainingCo
         seed=args.seed,
         checkpoint_path=args.checkpoint,
         pretrained_weights_path=args.pretrained_path,
+        resume=args.resume,
+        resume_path=resume_path,
+        last_checkpoint_path=last_checkpoint_path,
         log_every=args.log_every,
         class_score_thresholds=class_thresholds,
         exclude_samples=tuple(exclude_samples),
@@ -381,9 +467,68 @@ def evaluate(
     return metrics, sample_details
 
 
-def save_checkpoint(model: nn.Module, path: Path) -> None:
-    torch.save(model.state_dict(), path)
-    LOGGER.info("Saved checkpoint to %s", path)
+def save_checkpoint(
+    *,
+    path: Path,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer | None,
+    scaler: GradScaler | None,
+    epoch: int,
+    best_map: float,
+    history: List[Dict[str, float]],
+    train_cfg: TrainingConfig,
+) -> None:
+    checkpoint = {
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict() if optimizer is not None else None,
+        "scaler": scaler.state_dict() if scaler is not None and getattr(scaler, "is_enabled", lambda: True)() else None,
+        "epoch": epoch,
+        "best_map": float(best_map),
+        "history": list(history),
+        "config": train_cfg,
+    }
+    torch.save(checkpoint, path)
+    LOGGER.info("Saved checkpoint to %s (epoch %d, best mAP %.4f)", path, epoch, best_map)
+
+
+def load_checkpoint(
+    *,
+    path: Path,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer | None,
+    scaler: GradScaler | None,
+    device: torch.device,
+) -> tuple[int, float, List[Dict[str, float]]]:
+    if not path.exists():
+        LOGGER.warning("Checkpoint %s does not exist; starting fresh.", path)
+        return 1, -float("inf"), []
+
+    checkpoint_obj = torch.load(path, map_location=device)
+
+    if isinstance(checkpoint_obj, dict) and "model" in checkpoint_obj:
+        model.load_state_dict(checkpoint_obj["model"])
+        if optimizer is not None and checkpoint_obj.get("optimizer") is not None:
+            optimizer.load_state_dict(checkpoint_obj["optimizer"])
+        if scaler is not None and checkpoint_obj.get("scaler") is not None:
+            try:
+                scaler.load_state_dict(checkpoint_obj["scaler"])
+            except Exception as exc:  # pragma: no cover - fallback if scaler config changed
+                LOGGER.warning("Unable to load scaler state from %s: %s", path, exc)
+        epoch = int(checkpoint_obj.get("epoch", 0))
+        best_map = float(checkpoint_obj.get("best_map", -float("inf")))
+        history = checkpoint_obj.get("history", [])
+        LOGGER.info(
+            "Loaded checkpoint from %s (epoch %d, best mAP %.4f)",
+            path,
+            epoch,
+            best_map,
+        )
+        return epoch + 1, best_map, list(history)
+
+    # Legacy checkpoint: assume it's a plain state dict.
+    model.load_state_dict(checkpoint_obj)
+    LOGGER.info("Loaded model weights from legacy checkpoint %s", path)
+    return 1, -float("inf"), []
 
 
 def export_false_positive_visuals(
@@ -465,6 +610,12 @@ def main() -> None:
             mixup_prob=train_cfg.mixup_prob,
             mixup_alpha=train_cfg.mixup_alpha,
             scale_jitter_range=(train_cfg.scale_jitter_min, train_cfg.scale_jitter_max),
+            rotation_prob=train_cfg.rotation_prob,
+            rotation_max_degrees=train_cfg.rotation_max_degrees,
+            affine_prob=train_cfg.affine_prob,
+            affine_translate=train_cfg.affine_translate,
+            affine_scale_range=train_cfg.affine_scale_range,
+            affine_shear=train_cfg.affine_shear,
         ),
         use_augmentation=train_cfg.augmentation,
         exclude_stems=train_cfg.exclude_samples,
@@ -507,10 +658,21 @@ def main() -> None:
     optimizer = AdamW(model.parameters(), lr=train_cfg.learning_rate, weight_decay=train_cfg.weight_decay)
     scaler = GradScaler(enabled=train_cfg.amp and device.type == "cuda")
 
+    start_epoch = 1
     best_map = -float("inf")
     history: List[Dict[str, float]] = []
 
-    for epoch in range(1, train_cfg.epochs + 1):
+    if train_cfg.resume or train_cfg.resume_path is not None:
+        resume_source = train_cfg.resume_path or train_cfg.last_checkpoint_path
+        start_epoch, best_map, history = load_checkpoint(
+            path=resume_source,
+            model=model,
+            optimizer=optimizer,
+            scaler=scaler,
+            device=device,
+        )
+
+    for epoch in range(start_epoch, train_cfg.epochs + 1):
         LOGGER.info("Epoch %s/%s", epoch, train_cfg.epochs)
         train_loss = train_one_epoch(
             model, train_loader, optimizer, scaler, device, train_cfg.amp, train_cfg.log_every
@@ -543,7 +705,16 @@ def main() -> None:
 
             if metrics["mAP"] > best_map:
                 best_map = float(metrics["mAP"])
-                save_checkpoint(model, train_cfg.checkpoint_path)
+                save_checkpoint(
+                    path=train_cfg.checkpoint_path,
+                    model=model,
+                    optimizer=optimizer,
+                    scaler=scaler,
+                    epoch=epoch,
+                    best_map=best_map,
+                    history=history,
+                    train_cfg=train_cfg,
+                )
 
             if collect_fp:
                 fp_records = export_false_positive_visuals(
@@ -580,6 +751,17 @@ def main() -> None:
                 train_loss,
                 train_cfg.eval_interval,
             )
+
+        save_checkpoint(
+            path=train_cfg.last_checkpoint_path,
+            model=model,
+            optimizer=optimizer,
+            scaler=scaler,
+            epoch=epoch,
+            best_map=best_map,
+            history=history,
+            train_cfg=train_cfg,
+        )
 
     (train_cfg.output_dir / "training_history.json").write_text(json.dumps(history, indent=2))
     LOGGER.info("Training complete. Best mAP: %.4f", best_map)

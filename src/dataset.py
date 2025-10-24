@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import multiprocessing as mp
 import os
 import random
@@ -15,6 +16,8 @@ import pandas as pd
 import torch
 from PIL import Image as PILImage, ImageEnhance
 from torch.utils.data import DataLoader, Dataset
+from torchvision.transforms import InterpolationMode
+from torchvision.transforms import functional as TVF
 
 from .utils import running_in_ipython_kernel, sanitize_boxes_and_labels
 
@@ -32,6 +35,12 @@ class AugmentationParams:
     contrast: float = 0.2
     saturation: float = 0.2
     hue: float = 0.02
+    rotation_prob: float = 0.0
+    rotation_max_degrees: float = 0.0
+    affine_prob: float = 0.0
+    affine_translate: Tuple[float, float] = (0.0, 0.0)
+    affine_scale_range: Tuple[float, float] = (1.0, 1.0)
+    affine_shear: Tuple[float, float] = (0.0, 0.0)
     mosaic_prob: float = 0.0
     mixup_prob: float = 0.0
     mixup_alpha: float = 0.4
@@ -223,6 +232,59 @@ class ElectricalComponentsDataset(Dataset):
         params = self.transform_params
         height, width = image.shape[:2]
 
+        if (
+            params.rotation_prob > 0.0
+            and params.rotation_max_degrees > 0.0
+            and random.random() < params.rotation_prob
+        ):
+            angle = random.uniform(-params.rotation_max_degrees, params.rotation_max_degrees)
+            image, boxes = self._apply_affine_transform(
+                image,
+                boxes,
+                angle=angle,
+                translate=(0.0, 0.0),
+                scale=1.0,
+                shear=(0.0, 0.0),
+            )
+            height, width = image.shape[:2]
+
+        if params.affine_prob > 0.0 and random.random() < params.affine_prob:
+            max_tx = abs(params.affine_translate[0]) * width
+            max_ty = abs(params.affine_translate[1]) * height
+            translate = (
+                random.uniform(-max_tx, max_tx),
+                random.uniform(-max_ty, max_ty),
+            )
+
+            scale_min, scale_max = params.affine_scale_range
+            if scale_min > scale_max:
+                scale_min, scale_max = scale_max, scale_min
+            scale_min = max(scale_min, 0.0)
+            scale_max = max(scale_max, 0.0)
+            scale = 1.0
+            if scale_max > 0.0:
+                if math.isclose(scale_min, scale_max):
+                    scale = max(scale_min, 1e-3)
+                else:
+                    scale = max(random.uniform(scale_min, scale_max), 1e-3)
+
+            shear_x = params.affine_shear[0]
+            shear_y = params.affine_shear[1]
+            shear = (
+                random.uniform(-abs(shear_x), abs(shear_x)),
+                random.uniform(-abs(shear_y), abs(shear_y)),
+            )
+
+            image, boxes = self._apply_affine_transform(
+                image,
+                boxes,
+                angle=0.0,
+                translate=translate,
+                scale=scale,
+                shear=shear,
+            )
+            height, width = image.shape[:2]
+
         if boxes.size and random.random() < params.horizontal_flip_prob:
             image = np.ascontiguousarray(image[:, ::-1, :])
             x1 = width - boxes[:, 2]
@@ -287,6 +349,62 @@ class ElectricalComponentsDataset(Dataset):
             boxes[:, [0, 2]] *= float(new_width) / float(width)
             boxes[:, [1, 3]] *= float(new_height) / float(height)
         return image, boxes
+
+    def _apply_affine_transform(
+        self,
+        image: np.ndarray,
+        boxes: np.ndarray,
+        *,
+        angle: float,
+        translate: Tuple[float, float],
+        scale: float,
+        shear: Tuple[float, float],
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        if not np.isfinite(scale) or scale <= 0.0:
+            scale = 1.0
+
+        height, width = image.shape[:2]
+        pil = PILImage.fromarray(image)
+        translate_int = (
+            int(round(float(translate[0]))),
+            int(round(float(translate[1]))),
+        )
+        transformed = TVF.affine(
+            pil,
+            angle=float(angle),
+            translate=translate_int,
+            scale=float(max(scale, 1e-3)),
+            shear=(float(shear[0]), float(shear[1])),
+            interpolation=InterpolationMode.BILINEAR,
+            fill=0,
+        )
+        image_out = np.array(transformed)
+        out_height, out_width = image_out.shape[:2]
+
+        if not boxes.size:
+            return image_out, boxes.astype(np.float32, copy=False)
+
+        matrix = _compute_affine_forward_matrix(
+            center=(width * 0.5, height * 0.5),
+            angle=float(angle),
+            translate=(float(translate_int[0]), float(translate_int[1])),
+            scale=float(max(scale, 1e-3)),
+            shear=(float(shear[0]), float(shear[1])),
+        )
+
+        corners = _boxes_to_corners(boxes)
+        ones = np.ones((corners.shape[0], 1), dtype=np.float32)
+        coords = np.concatenate([corners, ones], axis=1)
+        full_matrix = np.vstack([matrix, [0.0, 0.0, 1.0]])
+        transformed_coords = coords @ full_matrix.T
+        transformed_corners = transformed_coords[:, :2].reshape(-1, 4, 2)
+        min_xy = transformed_corners.min(axis=1)
+        max_xy = transformed_corners.max(axis=1)
+
+        boxes_out = np.concatenate([min_xy, max_xy], axis=1)
+        boxes_out[:, [0, 2]] = boxes_out[:, [0, 2]].clip(0, out_width)
+        boxes_out[:, [1, 3]] = boxes_out[:, [1, 3]].clip(0, out_height)
+        return image_out, boxes_out.astype(np.float32, copy=False)
 
     def _apply_mosaic(
         self,
@@ -413,6 +531,54 @@ class ElectricalComponentsDataset(Dataset):
             boxes[:, [0, 2]] *= float(target_width) / float(width)
             boxes[:, [1, 3]] *= float(target_height) / float(height)
         return image, boxes
+
+
+def _boxes_to_corners(boxes: np.ndarray) -> np.ndarray:
+    corners = np.stack(
+        [
+            boxes[:, [0, 1]],
+            boxes[:, [2, 1]],
+            boxes[:, [2, 3]],
+            boxes[:, [0, 3]],
+        ],
+        axis=1,
+    )
+    return corners.reshape(-1, 2).astype(np.float32, copy=False)
+
+
+def _compute_affine_forward_matrix(
+    *,
+    center: Tuple[float, float],
+    angle: float,
+    translate: Tuple[float, float],
+    scale: float,
+    shear: Tuple[float, float],
+) -> np.ndarray:
+    rot = math.radians(angle)
+    shear_x = math.radians(shear[0])
+    shear_y = math.radians(shear[1])
+
+    cx, cy = center
+    tx, ty = translate
+
+    cos_sy = math.cos(shear_y)
+    if abs(cos_sy) < 1e-6:
+        cos_sy = 1e-6 if cos_sy >= 0 else -1e-6
+
+    a = math.cos(rot - shear_y) / cos_sy
+    b = -math.cos(rot - shear_y) * math.tan(shear_x) / cos_sy - math.sin(rot)
+    c = math.sin(rot - shear_y) / cos_sy
+    d = -math.sin(rot - shear_y) * math.tan(shear_x) / cos_sy + math.cos(rot)
+
+    matrix = [a, b, 0.0, c, d, 0.0]
+    matrix = [x * scale for x in matrix]
+
+    matrix[2] += matrix[0] * (-cx) + matrix[1] * (-cy)
+    matrix[5] += matrix[3] * (-cx) + matrix[4] * (-cy)
+    matrix[2] += cx + tx
+    matrix[5] += cy + ty
+
+    return np.array(matrix, dtype=np.float32).reshape(2, 3)
 
 
 def detection_collate(batch: List[Tuple[torch.Tensor, Dict[str, torch.Tensor]]]):

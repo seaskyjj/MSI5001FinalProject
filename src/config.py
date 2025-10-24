@@ -21,7 +21,7 @@ DEFAULT_CLASS_SCORE_THRESHOLDS = {
     16: 0.97,
     17: 0.999,
     20: 0.9,
-    21: 0.8,
+    21: 0.9,
     24: 0.999,
     25: 0.97,
     26: 0.999,
@@ -64,6 +64,12 @@ class TrainingConfig:
     mixup_alpha: float = 0.4
     scale_jitter_min: float = 0.7
     scale_jitter_max: float = 1.3
+    rotation_prob: float = 0.5
+    rotation_max_degrees: float = 30.0
+    affine_prob: float = 0.3
+    affine_translate: Tuple[float, float] = (0.1, 0.1)
+    affine_scale_range: Tuple[float, float] = (0.9, 1.1)
+    affine_shear: Tuple[float, float] = (5, 5)
     small_object: bool = True
     score_threshold: float = 0.6
     iou_threshold: float = 0.5
@@ -74,6 +80,9 @@ class TrainingConfig:
     pretrained_weights_path: Path = Path("weights/fasterrcnn_resnet50_fpn_v2_coco.pth")
     pretrained_weights_url: str = DEFAULT_PRETRAINED_URL
     log_every: int = 20
+    resume: bool = False
+    resume_path: Optional[Path] = None
+    last_checkpoint_path: Path = Path("outputs/last_checkpoint.pth")
     class_score_thresholds: Dict[int, float] = field(
         default_factory=lambda: DEFAULT_CLASS_SCORE_THRESHOLDS.copy()
     )
@@ -87,6 +96,8 @@ class TrainingConfig:
         """Create output directories if they do not exist."""
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.pretrained_weights_path.parent.mkdir(parents=True, exist_ok=True)
+        self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        self.last_checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         if self.fp_visual_dir:
             self.fp_visual_dir.mkdir(parents=True, exist_ok=True)
 
