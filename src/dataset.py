@@ -65,6 +65,8 @@ def load_image_hwc_uint8(path: Path) -> np.ndarray:
         image = np.repeat(image, 3, axis=2)
     elif channels == 4:
         image = image[..., :3]
+    if not image.flags.writeable or not image.flags.c_contiguous:
+        image = np.array(image, copy=True)
     return image
 
 

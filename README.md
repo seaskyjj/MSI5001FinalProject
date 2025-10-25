@@ -155,14 +155,21 @@ located at `/opt/MSI5001FinalProject/.venv`.
 
    [Service]
    Type=simple
-   User=<your-username>
-   WorkingDirectory=/opt/MSI5001FinalProject
-   ExecStart=/opt/MSI5001FinalProject/.venv/bin/python -m src.train \
-       --data-dir /opt/MSI5001FinalProject/data \
-       --epochs 25 \
+   User=iot
+   WorkingDirectory=/local/data/MSI5001FinalProject-main
+   ExecStart=/local/data/MSI5001FinalProject-main/.msi5001/bin/python -m src.train \
+       --data-dir /local/data/MSI5001FinalProject-main/dataset/ \
+       --epochs 200 \
+       --batch-size 4 --lr 1e-5 --num-workers 4 --small-object \
        --resume
    Restart=on-failure
+   RestartSec=10
+   KillSignal=SIGINT
+   TimeoutStopSec=300
    Environment=PYTHONUNBUFFERED=1
+
+   StandardOutput=journal
+   StandardError=journal
 
    [Install]
    WantedBy=multi-user.target
@@ -176,6 +183,7 @@ located at `/opt/MSI5001FinalProject/.venv`.
    ```bash
    sudo systemctl daemon-reload
    sudo systemctl enable --now msi5001-train.service
+   sudo systemctl status msi5001-train.service
    ```
 
 3. Monitor logs and manage the service:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import inspect
 import json
 import logging
 import numpy as np
@@ -11,10 +12,14 @@ from typing import Dict, List, Set
 
 import torch
 from torch import nn
-from torch.cuda.amp import GradScaler
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+
+try:
+    from torch.amp import GradScaler  # PyTorch 2.1+
+except ImportError:  # pragma: no cover - compatibility path
+    from torch.cuda.amp import GradScaler  # type: ignore[attr-defined]
 
 from .config import DEFAULT_CLASS_SCORE_THRESHOLDS, DatasetConfig, TrainingConfig
 from .dataset import AugmentationParams, ElectricalComponentsDataset, create_data_loaders
@@ -531,6 +536,16 @@ def load_checkpoint(
     return 1, -float("inf"), []
 
 
+def _create_grad_scaler(amp_enabled: bool, device: torch.device) -> GradScaler:
+    """Create a GradScaler compatible with both legacy and new AMP APIs."""
+    scaler_enabled = amp_enabled and device.type == "cuda"
+    init_params = inspect.signature(GradScaler.__init__).parameters
+    kwargs = {"enabled": scaler_enabled}
+    if "device_type" in init_params:
+        kwargs["device_type"] = device.type
+    return GradScaler(**kwargs)
+
+
 def export_false_positive_visuals(
     *,
     dataset: ElectricalComponentsDataset,
@@ -656,7 +671,7 @@ def main() -> None:
     )
 
     optimizer = AdamW(model.parameters(), lr=train_cfg.learning_rate, weight_decay=train_cfg.weight_decay)
-    scaler = GradScaler(enabled=train_cfg.amp and device.type == "cuda")
+    scaler = _create_grad_scaler(train_cfg.amp, device)
 
     start_epoch = 1
     best_map = -float("inf")
