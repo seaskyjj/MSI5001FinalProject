@@ -157,7 +157,7 @@ located at `/opt/MSI5001FinalProject/.venv`.
    Type=simple
    User=iot
    WorkingDirectory=/local/data/MSI5001FinalProject-main
-   ExecStart=/local/data/MSI5001FinalProject-main/.msi5001/bin/python -m src.train \
+   ExecStart=/home/iot/.msi5001/bin/python -m src.train \
        --data-dir /local/data/MSI5001FinalProject-main/dataset/ \
        --epochs 200 \
        --batch-size 4 --lr 1e-5 --num-workers 4 --small-object \
