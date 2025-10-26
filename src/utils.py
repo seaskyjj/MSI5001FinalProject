@@ -309,13 +309,16 @@ def score_threshold_mask(
     if scores.size == 0:
         return np.zeros_like(scores, dtype=bool)
 
+    labels_int = labels.astype(np.int64, copy=False)
     thresholds = np.full(scores.shape, default_threshold, dtype=scores.dtype)
     if class_thresholds:
-        labels_int = labels.astype(np.int64, copy=False)
+        labels_fg = labels_int - 1  # convert to original 0-based ids
         for cls, value in class_thresholds.items():
-            thresholds[labels_int == int(cls)] = float(value)
+            thresholds[labels_fg == int(cls)] = float(value)
 
-    return scores >= thresholds
+    keep = labels_int != 0  # drop background predictions outright
+    keep &= scores >= thresholds
+    return keep
 
 
 def parse_class_threshold_entries(entries: Sequence[str]) -> Dict[int, float]:
@@ -622,4 +625,3 @@ class MetricLogger:
     def format(self) -> str:
         parts = [f"{name}: {meter.avg:.4f}" for name, meter in self.meters.items()]
         return " | ".join(parts)
-

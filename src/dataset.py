@@ -197,7 +197,7 @@ class ElectricalComponentsDataset(Dataset):
         y2 = y_center + box_height / 2.0
 
         boxes = np.stack([x1, y1, x2, y2], axis=1).astype(np.float32)
-        labels = ann["class"].to_numpy(dtype=np.int64)
+        labels = ann["class"].to_numpy(dtype=np.int64) + 1  # shift to 1..K so 0 remains reserved for background
         return boxes, labels
 
     def _apply_composite_augmentations(

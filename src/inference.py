@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import pickle
+import inspect
 from pathlib import Path
 from typing import Dict, List
 
@@ -10,6 +12,11 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+
+try:
+    from torch.serialization import add_safe_globals
+except ImportError:  # pragma: no cover - compatibility for older PyTorch
+    add_safe_globals = None
 
 from .config import (
     DEFAULT_CLASS_SCORE_THRESHOLDS,
@@ -66,6 +73,24 @@ def parse_args() -> argparse.Namespace:
         help="Optional path to write newline separated image stems that produced false positives.",
     )
     return parser.parse_args()
+
+
+def _load_checkpoint_state(path: Path, device: torch.device) -> Dict[str, torch.Tensor]:
+    load_kwargs = {"map_location": device}
+    try:
+        checkpoint_obj = torch.load(path, **load_kwargs)
+    except pickle.UnpicklingError:
+        if add_safe_globals is not None:
+            add_safe_globals([TrainingConfig])
+        load_params = inspect.signature(torch.load).parameters
+        if "weights_only" in load_params:
+            load_kwargs["weights_only"] = False
+        checkpoint_obj = torch.load(path, **load_kwargs)
+
+    if isinstance(checkpoint_obj, dict) and "model" in checkpoint_obj:
+        return checkpoint_obj["model"]
+
+    return checkpoint_obj
 @torch.no_grad()
 def run_inference(args: argparse.Namespace) -> None:
     dataset_cfg = DatasetConfig(
@@ -97,7 +122,7 @@ def run_inference(args: argparse.Namespace) -> None:
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = build_model(dataset_cfg, train_cfg, device=device)
-    state_dict = torch.load(args.checkpoint, map_location=device)
+    state_dict = _load_checkpoint_state(args.checkpoint, device)
     model.load_state_dict(state_dict)
     model.eval()
 
@@ -120,21 +145,34 @@ def run_inference(args: argparse.Namespace) -> None:
 
         boxes_np = output["boxes"].detach().cpu().numpy()
         scores_np = output["scores"].detach().cpu().numpy()
-        labels_np = output["labels"].detach().cpu().numpy()
+        labels_np = output["labels"].detach().cpu().numpy().astype(np.int64, copy=False)
         keep = score_threshold_mask(
             scores_np,
             labels_np,
             inference_cfg.score_threshold,
             inference_cfg.class_score_thresholds,
         )
+        boxes_np = boxes_np[keep]
+        scores_np = scores_np[keep]
+        labels_np = labels_np[keep].astype(np.int64, copy=True)
+        if labels_np.size:
+            labels_np -= 1
+
+        target_boxes = targets[0]["boxes"].detach().cpu().numpy()
+        target_labels = targets[0]["labels"].detach().cpu().numpy().astype(np.int64, copy=True)
+        if target_labels.size:
+            gt_keep = target_labels > 0
+            target_boxes = target_boxes[gt_keep]
+            target_labels = target_labels[gt_keep] - 1
+
         prediction_np = {
-            "boxes": boxes_np[keep],
-            "scores": scores_np[keep],
-            "labels": labels_np[keep],
+            "boxes": boxes_np,
+            "scores": scores_np,
+            "labels": labels_np,
         }
         target_np = {
-            "boxes": targets[0]["boxes"].detach().cpu().numpy(),
-            "labels": targets[0]["labels"].detach().cpu().numpy(),
+            "boxes": target_boxes,
+            "labels": target_labels,
         }
 
         predictions.append(prediction_np)

@@ -7,6 +7,7 @@ import inspect
 import json
 import logging
 import numpy as np
+from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, List, Set
 
@@ -410,22 +411,36 @@ def evaluate(
 
         outputs = model(images)
         for output, target_device, target_cpu in zip(outputs, targets_device, targets):
-            scores = output["scores"].detach().cpu().numpy()
-            labels = output["labels"].detach().cpu().numpy()
+            boxes_np = output["boxes"].detach().cpu().numpy()
+            scores_np = output["scores"].detach().cpu().numpy()
+            labels_np = output["labels"].detach().cpu().numpy().astype(np.int64, copy=False)
             keep = score_threshold_mask(
-                scores,
-                labels,
+                scores_np,
+                labels_np,
                 train_cfg.score_threshold,
                 train_cfg.class_score_thresholds,
             )
+            boxes_np = boxes_np[keep]
+            scores_np = scores_np[keep]
+            labels_np = labels_np[keep].astype(np.int64, copy=True)
+            if labels_np.size:
+                labels_np -= 1
+
+            target_boxes = target_device["boxes"].detach().cpu().numpy()
+            target_labels = target_device["labels"].detach().cpu().numpy().astype(np.int64, copy=True)
+            if target_labels.size:
+                gt_keep = target_labels > 0
+                target_boxes = target_boxes[gt_keep]
+                target_labels = target_labels[gt_keep] - 1
+
             prediction_np = {
-                "boxes": output["boxes"].detach().cpu().numpy()[keep],
-                "scores": scores[keep],
-                "labels": labels[keep],
+                "boxes": boxes_np,
+                "scores": scores_np,
+                "labels": labels_np,
             }
             target_np = {
-                "boxes": target_device["boxes"].detach().cpu().numpy(),
-                "labels": target_device["labels"].detach().cpu().numpy(),
+                "boxes": target_boxes,
+                "labels": target_labels,
             }
 
             predictions.append(prediction_np)
@@ -490,7 +505,7 @@ def save_checkpoint(
         "epoch": epoch,
         "best_map": float(best_map),
         "history": list(history),
-        "config": train_cfg,
+        "config": asdict(train_cfg),
     }
     torch.save(checkpoint, path)
     LOGGER.info("Saved checkpoint to %s (epoch %d, best mAP %.4f)", path, epoch, best_map)
