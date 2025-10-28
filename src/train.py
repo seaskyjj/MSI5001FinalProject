@@ -10,7 +10,7 @@ import numpy as np
 from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, List, Set
-
+import pickle
 import torch
 from torch import nn
 from torch.optim import AdamW
@@ -22,6 +22,10 @@ try:
 except ImportError:  # pragma: no cover - compatibility path
     from torch.cuda.amp import GradScaler  # type: ignore[attr-defined]
 
+try:
+    from torch.serialization import add_safe_globals
+except ImportError:  # pragma: no cover - compatibility path
+    add_safe_globals = None
 from .config import DEFAULT_CLASS_SCORE_THRESHOLDS, DatasetConfig, TrainingConfig
 from .dataset import AugmentationParams, ElectricalComponentsDataset, create_data_loaders
 from .model import build_model
@@ -511,6 +515,25 @@ def save_checkpoint(
     LOGGER.info("Saved checkpoint to %s (epoch %d, best mAP %.4f)", path, epoch, best_map)
 
 
+def _load_checkpoint_file(path: Path, device: torch.device) -> object:
+    load_kwargs = {"map_location": device}
+    try:
+        return torch.load(path, **load_kwargs)
+    except pickle.UnpicklingError:
+        safe_objects: List[object] = []
+        if add_safe_globals is not None:
+            safe_objects.append(TrainingConfig)
+            try:
+                safe_objects.append(type(Path(".")))
+            except Exception:  # pragma: no cover - defensive
+                pass
+            add_safe_globals(safe_objects)
+        load_params = inspect.signature(torch.load).parameters
+        if "weights_only" in load_params:
+            load_kwargs["weights_only"] = False
+        return torch.load(path, **load_kwargs)
+
+
 def load_checkpoint(
     *,
     path: Path,
@@ -523,7 +546,7 @@ def load_checkpoint(
         LOGGER.warning("Checkpoint %s does not exist; starting fresh.", path)
         return 1, -float("inf"), []
 
-    checkpoint_obj = torch.load(path, map_location=device)
+    checkpoint_obj = _load_checkpoint_file(path, device)
 
     if isinstance(checkpoint_obj, dict) and "model" in checkpoint_obj:
         model.load_state_dict(checkpoint_obj["model"])

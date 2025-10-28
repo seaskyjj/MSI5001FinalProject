@@ -12,7 +12,6 @@ DEFAULT_PRETRAINED_URL = (
 
 #0.999 menas class does not exist
 DEFAULT_CLASS_SCORE_THRESHOLDS = {
-    0: 0.3,
     3: 0.999,  
     6: 0.8,
     7: 0.9,
@@ -54,16 +53,16 @@ class TrainingConfig:
 
     epochs: int = 20
     batch_size: int = 4
-    learning_rate: float = 1e-5
-    weight_decay: float = 1e-5
+    learning_rate: float = 5e-5
+    weight_decay: float = 5e-5
     num_workers: int = 0
     amp: bool = True
     augmentation: bool = True
     mosaic_prob: float = 0.6
     mixup_prob: float = 0.6
     mixup_alpha: float = 0.4
-    scale_jitter_min: float = 0.7
-    scale_jitter_max: float = 1.3
+    scale_jitter_min: float = 0.8
+    scale_jitter_max: float = 1.2
     rotation_prob: float = 0.5
     rotation_max_degrees: float = 30.0
     affine_prob: float = 0.3
@@ -74,7 +73,7 @@ class TrainingConfig:
     score_threshold: float = 0.6
     iou_threshold: float = 0.5
     eval_interval: int = 1
-    seed: int = 2024
+    seed: int = 37
     output_dir: Path = Path("outputs")
     checkpoint_path: Path = Path("outputs/best_model.pth")
     pretrained_weights_path: Path = Path("weights/fasterrcnn_resnet50_fpn_v2_coco.pth")
