@@ -16,6 +16,12 @@ MSI5001FinalProject/
 │   ├── model.py              # Faster R-CNN construction helpers
 │   ├── train.py              # Main training script
 │   └── utils.py              # Metrics, logging helpers and math utilities
+├── eda/
+│   ├── convert_npy_to_jpg.py # Utility: convert .npy arrays to JPEGs
+│   ├── crop_and_export.py    # Utility: crop and export per-object patches
+│   └── json_to_csv.py        # Utility: convert training history JSON to CSV
+├── outputs/                  # Generated checkpoints, reports, visuals
+├── weights/                  # Pretrained weights cache
 └── data/
     ├── train/
     │   ├── images/*.npy
@@ -69,6 +75,8 @@ Key flags:
   controls matching for metric computation.
 * `--class-threshold CLS=VALUE` overrides the confidence threshold for a specific class. Multiple
   overrides can be supplied (for example, `--class-threshold 3=0.7 --class-threshold 25=0.75`).
+  When calling the training helpers from Python (e.g. the notebook version), pass the same strings
+  inside a list: `train_args.class_threshold = ["3=0.7", "25=0.75"]`.
 * `--checkpoint` defines where the best model (highest mAP) is saved.
 * `--resume` restores the latest training state from `outputs/last_checkpoint.pth` (model, optimiser,
   GradScaler and metric history). Combine it with `--resume-path /path/to/checkpoint.pth` to resume
@@ -101,7 +109,9 @@ python -m src.train --data-dir /path/to/dataset --resume-path outputs/best_model
 The checkpoint stores the model parameters, optimiser state (including momentum and learning rate),
 automatic mixed precision scaler and accumulated metric history. Continuing with `--resume` keeps
 the learning schedule and optimiser warm-up intact, whereas launching without it only reloads the
-pretrained weights and restarts optimisation from scratch.
+pretrained weights and restarts optimisation from scratch. If the restored checkpoint has already
+reached a higher epoch than the requested `--epochs`, training exits early with a message; increase
+the epoch budget when you want to extend the run.
 
 ### Choosing affine parameters
 
@@ -208,7 +218,7 @@ python -m src.inference \
   --class-threshold 3=0.7 --class-threshold 6=0.7 --class-threshold 8=0.7 \
   --class-threshold 12=0.7 --class-threshold 17=0.7 --class-threshold 24=0.7 \
   --class-threshold 25=0.7 --class-threshold 26=0.7 \
-  --draw-ground-truth
+  --draw-ground-truth \
   --fp-report outputs/fp_report.json \
   --fp-list outputs/fp_stems.txt
 ```

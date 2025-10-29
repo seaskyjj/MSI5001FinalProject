@@ -259,7 +259,13 @@ def prepare_configs(args: argparse.Namespace) -> tuple[DatasetConfig, TrainingCo
     else:
         fp_classes = default_train_cfg.fp_classes
 
-    fp_dir = args.fp_dir if args.fp_dir is not None else default_train_cfg.fp_visual_dir
+    if args.fp_dir is not None:
+        fp_dir = Path(args.fp_dir)
+    else:
+        fp_dir = default_train_cfg.fp_visual_dir
+
+    fp_report_path = Path(args.fp_report) if args.fp_report is not None else args.fp_report
+    fp_list_path = Path(args.fp_list) if args.fp_list is not None else args.fp_list
 
     if args.scale_jitter:
         scale_min, scale_max = args.scale_jitter
@@ -286,9 +292,11 @@ def prepare_configs(args: argparse.Namespace) -> tuple[DatasetConfig, TrainingCo
     else:
         affine_shear = default_train_cfg.affine_shear
 
-    last_checkpoint_path = args.checkpoint.parent / "last_checkpoint.pth"
+    checkpoint_path = Path(args.checkpoint)
+    pretrained_path = Path(args.pretrained_path)
+    last_checkpoint_path = checkpoint_path.parent / "last_checkpoint.pth"
     if args.resume_path is not None:
-        resume_path = args.resume_path
+        resume_path = Path(args.resume_path)
     elif args.resume:
         resume_path = last_checkpoint_path
     else:
@@ -318,8 +326,8 @@ def prepare_configs(args: argparse.Namespace) -> tuple[DatasetConfig, TrainingCo
         iou_threshold=args.iou_threshold,
         eval_interval=args.eval_interval,
         seed=args.seed,
-        checkpoint_path=args.checkpoint,
-        pretrained_weights_path=args.pretrained_path,
+        checkpoint_path=checkpoint_path,
+        pretrained_weights_path=pretrained_path,
         resume=args.resume,
         resume_path=resume_path,
         last_checkpoint_path=last_checkpoint_path,
@@ -327,8 +335,8 @@ def prepare_configs(args: argparse.Namespace) -> tuple[DatasetConfig, TrainingCo
         class_score_thresholds=class_thresholds,
         exclude_samples=tuple(exclude_samples),
         fp_visual_dir=fp_dir,
-        fp_report_path=args.fp_report,
-        fp_list_path=args.fp_list,
+        fp_report_path=fp_report_path,
+        fp_list_path=fp_list_path,
         fp_classes=fp_classes,
     )
     train_cfg.ensure_directories()
@@ -644,8 +652,7 @@ def export_false_positive_visuals(
     return fp_records
 
 
-def main() -> None:
-    args = parse_args()
+def run_training(args: argparse.Namespace) -> None:
     dataset_cfg, train_cfg = prepare_configs(args)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -724,6 +731,15 @@ def main() -> None:
             scaler=scaler,
             device=device,
         )
+        if start_epoch > train_cfg.epochs:
+            LOGGER.info(
+                "Checkpoint %s already reached epoch %d; target epochs=%d. Nothing left to train. "
+                "Increase --epochs if you want to continue.",
+                resume_source,
+                start_epoch - 1,
+                train_cfg.epochs,
+            )
+            return
 
     for epoch in range(start_epoch, train_cfg.epochs + 1):
         LOGGER.info("Epoch %s/%s", epoch, train_cfg.epochs)
@@ -818,6 +834,11 @@ def main() -> None:
 
     (train_cfg.output_dir / "training_history.json").write_text(json.dumps(history, indent=2))
     LOGGER.info("Training complete. Best mAP: %.4f", best_map)
+
+
+def main() -> None:
+    args = parse_args()
+    run_training(args)
 
 
 if __name__ == "__main__":
