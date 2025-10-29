@@ -137,6 +137,7 @@ def convert_one(npy_path: Path, root: Path, out_root: Path, overwrite: bool, bat
         return f"[skip exists] {out_path}"
     try:
         data = np.load(str(npy_path), allow_pickle=True)
+        # ``batch_index`` selects which slice to export when the .npy stores a stack of images.
         arr = find_image_array(data, batch_index=batch_index)
         img_u8 = to_uint8_hwc(arr)
         save_image(img_u8, out_path)
@@ -164,6 +165,7 @@ def main():
     outdir_name = getattr(args, "outdir_name", None) or "img"
     out_root = root / outdir_name
 
+    # Toggle recursion based on ``--nonrecursive`` to support flat export directories.
     pattern = "**/*.npy" if not args.nonrecursive else "*.npy"
     files = sorted(root.glob(pattern))
 

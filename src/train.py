@@ -247,10 +247,12 @@ def prepare_configs(args: argparse.Namespace) -> tuple[DatasetConfig, TrainingCo
         num_classes=args.num_classes,
     )
 
+    # Start with class-specific score thresholds tuned during experimentation and allow CLI overrides.
     class_thresholds = DEFAULT_CLASS_SCORE_THRESHOLDS.copy()
     overrides = parse_class_threshold_entries(args.class_threshold)
     class_thresholds.update(overrides)
 
+    # Combine --exclude-list files with any ad-hoc --exclude-sample arguments.
     exclude_samples = _resolve_exclusions(args.exclude_list, args.exclude_sample)
 
     if args.fp_class:
@@ -267,6 +269,7 @@ def prepare_configs(args: argparse.Namespace) -> tuple[DatasetConfig, TrainingCo
     fp_report_path = Path(args.fp_report) if args.fp_report is not None else args.fp_report
     fp_list_path = Path(args.fp_list) if args.fp_list is not None else args.fp_list
 
+    # Fallback to default scale jitter window when the CLI flag is omitted.
     if args.scale_jitter:
         scale_min, scale_max = args.scale_jitter
     else:
@@ -302,6 +305,7 @@ def prepare_configs(args: argparse.Namespace) -> tuple[DatasetConfig, TrainingCo
     else:
         resume_path = None
 
+    # Populate the training config dataclass; inline comments above define what each hyper-parameter controls.
     train_cfg = TrainingConfig(
         epochs=args.epochs,
         batch_size=args.batch_size,
@@ -384,6 +388,7 @@ def train_one_epoch(
 
         metric_logger.update(loss=loss.item())
         if step % log_every == 0:
+            # ``log_every`` controls how often intermediate loss averages are surfaced.
             progress.set_postfix_str(metric_logger.format())
 
     return metric_logger.meters.get("loss").avg if metric_logger.meters else 0.0
@@ -747,6 +752,7 @@ def run_training(args: argparse.Namespace) -> None:
             model, train_loader, optimizer, scaler, device, train_cfg.amp, train_cfg.log_every
         )
 
+        # ``eval_interval`` can skip mid-epoch validations to speed up experiments.
         should_evaluate = (epoch % train_cfg.eval_interval == 0) or (epoch == train_cfg.epochs)
         collect_fp = should_evaluate and epoch == train_cfg.epochs
 

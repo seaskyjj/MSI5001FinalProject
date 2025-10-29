@@ -91,6 +91,7 @@ def _load_checkpoint_state(path: Path, device: torch.device) -> Dict[str, torch.
         return checkpoint_obj["model"]
 
     return checkpoint_obj
+
 @torch.no_grad()
 def run_inference(args: argparse.Namespace) -> None:
     dataset_cfg = DatasetConfig(
@@ -98,10 +99,12 @@ def run_inference(args: argparse.Namespace) -> None:
         test_split=args.split,
         num_classes=args.num_classes,
     )
+    # Start with tuned defaults and merge any per-class score threshold overrides.
     class_thresholds = DEFAULT_CLASS_SCORE_THRESHOLDS.copy()
     overrides = parse_class_threshold_entries(args.class_threshold)
     class_thresholds.update(overrides)
 
+    # ``InferenceConfig`` drives post-processing thresholds and visual export limits.
     inference_cfg = InferenceConfig(
         score_threshold=args.score_threshold,
         max_images=args.max_images,
@@ -111,6 +114,7 @@ def run_inference(args: argparse.Namespace) -> None:
     )
     inference_cfg.ensure_directories()
 
+    # Reuse ``TrainingConfig`` to pass detection thresholds and pretrained weight locations.
     train_cfg = TrainingConfig(
         augmentation=False,
         score_threshold=args.score_threshold,

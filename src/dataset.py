@@ -29,22 +29,22 @@ LOGGER = logging.getLogger(__name__)
 class AugmentationParams:
     """Parameters controlling the dataset level image augmentations."""
 
-    horizontal_flip_prob: float = 0.5
-    vertical_flip_prob: float = 0.2
-    brightness: float = 0.2
-    contrast: float = 0.2
-    saturation: float = 0.2
-    hue: float = 0.02
-    rotation_prob: float = 0.0
-    rotation_max_degrees: float = 0.0
-    affine_prob: float = 0.0
-    affine_translate: Tuple[float, float] = (0.0, 0.0)
-    affine_scale_range: Tuple[float, float] = (1.0, 1.0)
-    affine_shear: Tuple[float, float] = (0.0, 0.0)
-    mosaic_prob: float = 0.0
-    mixup_prob: float = 0.0
-    mixup_alpha: float = 0.4
-    scale_jitter_range: Tuple[float, float] = (1.0, 1.0)
+    horizontal_flip_prob: float = 0.5  # Chance of mirroring along the X axis.
+    vertical_flip_prob: float = 0.2  # Chance of mirroring along the Y axis.
+    brightness: float = 0.2  # +/- factor applied to brightness adjustments.
+    contrast: float = 0.2  # +/- factor applied to contrast adjustments.
+    saturation: float = 0.2  # +/- factor applied to saturation tweaks.
+    hue: float = 0.02  # +/- fraction of 255 used for hue perturbations.
+    rotation_prob: float = 0.0  # Probability of applying a random rotation.
+    rotation_max_degrees: float = 0.0  # Maximum absolute angle for random rotations.
+    affine_prob: float = 0.0  # Probability of invoking the affine transform block.
+    affine_translate: Tuple[float, float] = (0.0, 0.0)  # Max translation offsets as width/height fractions.
+    affine_scale_range: Tuple[float, float] = (1.0, 1.0)  # Multiplicative min/max scaling during affine transforms.
+    affine_shear: Tuple[float, float] = (0.0, 0.0)  # Max shear angles for X and Y axes.
+    mosaic_prob: float = 0.0  # Probability of assembling a four-image mosaic.
+    mixup_prob: float = 0.0  # Probability of calling MixUp on the current example.
+    mixup_alpha: float = 0.4  # Beta distribution alpha controlling MixUp blending strength.
+    scale_jitter_range: Tuple[float, float] = (1.0, 1.0)  # Uniform resize factor prior to other augmentations.
 
 
 def load_image_hwc_uint8(path: Path) -> np.ndarray:
@@ -102,6 +102,7 @@ class ElectricalComponentsDataset(Dataset):
 
         exclude_set: Set[str] = set()
         if exclude_stems:
+            # Allow the config to drop problematic samples by file stem.
             exclude_set = {Path(stem).stem for stem in exclude_stems}
             if exclude_set:
                 before = len(self.image_stems)

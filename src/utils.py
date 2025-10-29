@@ -313,6 +313,7 @@ def score_threshold_mask(
     thresholds = np.full(scores.shape, default_threshold, dtype=scores.dtype)
     if class_thresholds:
         labels_fg = labels_int - 1  # convert to original 0-based ids
+        # Apply per-class overrides to tighten/loosen detection confidence requirements.
         for cls, value in class_thresholds.items():
             thresholds[labels_fg == int(cls)] = float(value)
 

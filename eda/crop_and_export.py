@@ -44,6 +44,7 @@ CSV_EXT = ".csv"
 
 def _scan_images(root: Path) -> Dict[str, Path]:
     """扫描图像目录，返回 {基名: 路径}。若同基名有多扩展，优先级 .npy>.jpg>.jpeg>.png。"""
+    # Traverse ``root`` and pick the best candidate file for each image stem.
     buckets: Dict[str, Dict[str, Path]] = {}
     for p in root.rglob("*"):
         if not p.is_file():
@@ -66,6 +67,7 @@ def _scan_images(root: Path) -> Dict[str, Path]:
 
 def _scan_labels(root: Path) -> Dict[str, Path]:
     """扫描标注目录，返回 {基名: csv路径}。"""
+    # Gather CSV annotation files indexed by their filename stem.
     res: Dict[str, Path] = {}
     for p in root.rglob("*.csv"):
         if not p.is_file():
@@ -77,6 +79,7 @@ def _scan_labels(root: Path) -> Dict[str, Path]:
 
 def find_pairs_mirrored(images_root: Path, labels_root: Path) -> List[Tuple[Path, Path]]:
     """在分离目录(images/labels)中，按同名基名配对。"""
+    # Pair images and labels stored in sibling directory trees.
     img_map = _scan_images(images_root)
     lbl_map = _scan_labels(labels_root)
     common = sorted(set(img_map.keys()) & set(lbl_map.keys()))
@@ -92,6 +95,7 @@ def find_pairs_mirrored(images_root: Path, labels_root: Path) -> List[Tuple[Path
 
 def find_pairs_flat(root: Path) -> Iterable[Tuple[Path, Path]]:
     """在单一目录树下按同名配对（向后兼容）。"""
+    # Support the legacy layout where images and CSVs are interleaved under one directory tree.
     buckets: Dict[str, Dict[str, Path]] = {}
     for p in root.rglob("*"):
         if not p.is_file():
@@ -119,6 +123,7 @@ def find_pairs_flat(root: Path) -> Iterable[Tuple[Path, Path]]:
 
 def load_image(img_path: Path) -> np.ndarray:
     """加载图像，返回 HxWxC 的 uint8 RGB 数组。支持 .npy 或常见图片格式。"""
+    # Normalise heterogeneous image containers into standard ``uint8`` RGB arrays.
     ext = img_path.suffix.lower()
     if ext == ".npy":
         arr = np.load(img_path, allow_pickle=False)
@@ -152,6 +157,7 @@ def clip_box(x1: int, y1: int, x2: int, y2: int, w: int, h: int) -> Tuple[int, i
 
 
 def ensure_unique(base_path: Path) -> Path:
+    # Avoid clobbering exports by suffixing an incrementing counter when needed.
     if not base_path.exists():
         return base_path
     stem = base_path.stem
@@ -167,6 +173,7 @@ def ensure_unique(base_path: Path) -> Path:
 # ---------------------------- 主处理 ---------------------------- #
 
 def process_one(img_path: Path, csv_path: Path, out_dir: Path) -> None:
+    # Split one labelled sample into per-object crops while preserving metadata for auditability.
     arr = load_image(img_path)
     H, W = arr.shape[:2]
 

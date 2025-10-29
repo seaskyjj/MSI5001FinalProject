@@ -17,6 +17,7 @@ def main():
     )
     args = parser.parse_args()
 
+    # Default to mirroring the input JSON name when ``--output`` is unspecified.
     output_path = args.output or args.json_path.with_suffix(".csv")
 
     with args.json_path.open("r", encoding="utf-8") as json_file:

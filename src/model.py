@@ -40,25 +40,26 @@ def build_model(
     model.roi_heads.box_predictor = FastRCNNPredictor(
         in_features, num_classes_with_background
     )
+    # ``num_classes + 1`` keeps class index 0 reserved for the background class expected by Faster R-CNN.
 
     if train_cfg.small_object:
+        # Custom anchor grid tailored to small PCB components; the extra aspect ratios widen coverage.
         anchor_generator = AnchorGenerator(
             #sizes=((16,), (32,), (64,), (128,), (256,)),
-            #aspect_ratios=((0.5, 1.0, 2.0),) * 5,
+            #aspect_ratios=((0.5, 1.0, 2.0),) * 3,
             sizes=((16, 24), (32, 48), (64, 96), (128, 192), (256, 384)),
             aspect_ratios=((0.2, 0.5, 1.0, 2.0, 5.0),) * 5
         )
         model.rpn.anchor_generator = anchor_generator
         LOGGER.info("Using custom anchor sizes optimised for small objects")
 
-        # 1. 从旧的 RPNHead 中获取 in_channels
+        # Step 1: reuse the existing head's input channels.
         in_channels = model.rpn.head.cls_logits.in_channels
 
-        # 2. 从新的 AnchorGenerator 获取每个位置的锚框数
-        #    (例如，5 个 aspect_ratios * 2 个 sizes = 10)
+        # Step 2: derive the new number of anchors per location (e.g. 5 ratios * 2 sizes = 10).
         num_anchors_per_location = anchor_generator.num_anchors_per_location()[0]
     
-        # 3. 创建并替换 RPNHead
+        # Step 3: rebuild the RPN head so logits/regression layers match the expanded anchor grid.
         new_head = RPNHead(in_channels, num_anchors_per_location)
         model.rpn.head = new_head
         LOGGER.info(
