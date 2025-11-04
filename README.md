@@ -19,10 +19,11 @@ MSI5001FinalProject/
 ├── eda/
 │   ├── convert_npy_to_jpg.py # Utility: convert .npy arrays to JPEGs
 │   ├── crop_and_export.py    # Utility: crop and export per-object patches
+|   |── shuffle_dataset.py    # Utility: randomly reblance the the class 00 in dataset
 │   └── json_to_csv.py        # Utility: convert training history JSON to CSV
 ├── outputs/                  # Generated checkpoints, reports, visuals
 ├── weights/                  # Pretrained weights cache
-└── data/
+└── dataset/
     ├── train/
     │   ├── images/*.npy
     │   └── labels/*.csv
@@ -113,34 +114,30 @@ pretrained weights and restarts optimisation from scratch. If the restored check
 reached a higher epoch than the requested `--epochs`, training exits early with a message; increase
 the epoch budget when you want to extend the run.
 
-### Choosing affine parameters
+## Inference and visualisation
 
-The affine augmentations are sampled only when `--affine-prob` (or `TrainingConfig.affine_prob`)
-is greater than zero. Recommended ranges for the remaining parameters:
+```bash
+python -m src.inference \
+  --data-dir /path/to/dataset \
+  --split test \
+  --checkpoint outputs/best_model.pth \
+  --score-threshold 0.6 \
+  --class-threshold 3=0.7 --class-threshold 6=0.7 --class-threshold 8=0.7 \
+  --class-threshold 12=0.7 --class-threshold 17=0.7 --class-threshold 24=0.7 \
+  --class-threshold 25=0.7 --class-threshold 26=0.7 \
+  --draw-ground-truth \
+  --fp-report outputs/fp_report.json \
+  --fp-list outputs/fp_stems.txt
+```
 
-* `affine_translate`: fractions of image width/height. Values in the `0.05–0.15` range
-  (`--affine-translate 0.1 0.1`) allow small shifts without dropping too many boxes.
-* `affine_scale_range`: multiplicative zoom sampled uniformly between the bounds. Try
-  `--affine-scale 0.9 1.1` to jitter size by ±10%; keep both bounds positive and swap order
-  if needed.
-* `affine_shear`: maximum absolute shear (in degrees) around the x/y axes. Mild shear such as
-  `--affine-shear 5 5` keeps rectangular components recognisable. Larger angles increase
-  distortion and should be paired with a higher `--affine-prob` only if the dataset already
-  contains similar perspective effects.
-
-### Skipping images that cause false positives
-
-1. Run inference on a labelled split (`train` or `valid`) with `--draw-ground-truth` to export
-   annotated predictions. Add `--fp-report outputs/fp_report.json` or
-   `--fp-list outputs/fp_stems.txt` to save a structured summary of the samples that produced
-   false positives.
-2. Inspect the generated images to confirm the problematic detections. The JSON report records the
-   per-image boxes, scores and IoU overlaps, while the plain-text list simply enumerates the image
-   stems.
-3. Launch a new training run with either `--exclude-list outputs/fp_stems.txt` or individual
-   `--exclude-sample STEM` flags so those samples are removed from the training dataloader. The
-   Kaggle notebook exposes the same functionality via `TrainingConfig.exclude_samples` and the
-   `metrics["false_positive_stems"]` output returned by `run_inference`.
+The script reports per-class metrics on the selected split (when labels are present), computes
+the global mAP and saves annotated predictions to `outputs/inference/`. Ground-truth boxes are
+drawn in white when `--draw-ground-truth` is set. By default the classes `03`, `06`, `08`, `12`,
+`17`, `24`, `25` and `26` use a stricter `0.7` threshold while the remaining classes rely on the
+global `0.6` cutoff; adjust these with `--class-threshold` as needed. The optional `--fp-report`
+and `--fp-list` flags mirror the notebook behaviour by writing a JSON report or a newline-separated
+list of stems that produced false positives, allowing quick exclusion during subsequent training
+runs.
 
 ## Working offline
 
@@ -165,10 +162,10 @@ located at `/opt/MSI5001FinalProject/.venv`.
 
    [Service]
    Type=simple
-   User=iot
-   WorkingDirectory=/local/data/MSI5001FinalProject-main
-   ExecStart=/home/iot/.msi5001/bin/python -m src.train \
-       --data-dir /local/data/MSI5001FinalProject-main/dataset/ \
+   User=<your username>
+   WorkingDirectory=/<path to project>/MSI5001FinalProject-main
+   ExecStart=/<path to project>/.msi5001/bin/python -m src.train \
+       --data-dir /<path to project>/MSI5001FinalProject-main/dataset/ \
        --epochs 200 \
        --batch-size 4 --lr 1e-5 --num-workers 4 --small-object \
        --resume
@@ -207,30 +204,36 @@ located at `/opt/MSI5001FinalProject/.venv`.
 The service survives SSH disconnects and automatically restarts if the process exits with an error.
 Update the unit file and rerun `daemon-reload` whenever you change the command line.
 
-## Inference and visualisation
+## Data augmentation
 
-```bash
-python -m src.inference \
-  --data-dir /path/to/dataset \
-  --split test \
-  --checkpoint outputs/best_model.pth \
-  --score-threshold 0.6 \
-  --class-threshold 3=0.7 --class-threshold 6=0.7 --class-threshold 8=0.7 \
-  --class-threshold 12=0.7 --class-threshold 17=0.7 --class-threshold 24=0.7 \
-  --class-threshold 25=0.7 --class-threshold 26=0.7 \
-  --draw-ground-truth \
-  --fp-report outputs/fp_report.json \
-  --fp-list outputs/fp_stems.txt
-```
+### Choosing affine parameters
 
-The script reports per-class metrics on the selected split (when labels are present), computes
-the global mAP and saves annotated predictions to `outputs/inference/`. Ground-truth boxes are
-drawn in white when `--draw-ground-truth` is set. By default the classes `03`, `06`, `08`, `12`,
-`17`, `24`, `25` and `26` use a stricter `0.7` threshold while the remaining classes rely on the
-global `0.6` cutoff; adjust these with `--class-threshold` as needed. The optional `--fp-report`
-and `--fp-list` flags mirror the notebook behaviour by writing a JSON report or a newline-separated
-list of stems that produced false positives, allowing quick exclusion during subsequent training
-runs.
+The affine augmentations are sampled only when `--affine-prob` (or `TrainingConfig.affine_prob`)
+is greater than zero. Recommended ranges for the remaining parameters:
+
+* `affine_translate`: fractions of image width/height. Values in the `0.05–0.15` range
+  (`--affine-translate 0.1 0.1`) allow small shifts without dropping too many boxes.
+* `affine_scale_range`: multiplicative zoom sampled uniformly between the bounds. Try
+  `--affine-scale 0.9 1.1` to jitter size by ±10%; keep both bounds positive and swap order
+  if needed.
+* `affine_shear`: maximum absolute shear (in degrees) around the x/y axes. Mild shear such as
+  `--affine-shear 5 5` keeps rectangular components recognisable. Larger angles increase
+  distortion and should be paired with a higher `--affine-prob` only if the dataset already
+  contains similar perspective effects.
+
+### Skipping images that cause false positives
+
+1. Run inference on a labelled split (`train` or `valid`) with `--draw-ground-truth` to export
+   annotated predictions. Add `--fp-report outputs/fp_report.json` or
+   `--fp-list outputs/fp_stems.txt` to save a structured summary of the samples that produced
+   false positives.
+2. Inspect the generated images to confirm the problematic detections. The JSON report records the
+   per-image boxes, scores and IoU overlaps, while the plain-text list simply enumerates the image
+   stems.
+3. Launch a new training run with either `--exclude-list outputs/fp_stems.txt` or individual
+   `--exclude-sample STEM` flags so those samples are removed from the training dataloader. The
+   Kaggle notebook exposes the same functionality via `TrainingConfig.exclude_samples` and the
+   `metrics["false_positive_stems"]` output returned by `run_inference`.
 
 ## Extending the project
 
